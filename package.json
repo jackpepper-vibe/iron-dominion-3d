@@ -1,0 +1,26 @@
+{
+  "name": "iron-dominion-3d",
+  "version": "2.0.0",
+  "description": "Classic-style RTS rendered in real 3D — heightfield terrain, procedural armour, fixed-rake command camera.",
+  "main": "index.html",
+  "scripts": {
+    "shot": "node scripts/shot.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node scripts/smoke.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackpepper-vibe/iron-dominion-3d.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jackpepper-vibe/iron-dominion-3d/issues"
+  },
+  "homepage": "https://github.com/jackpepper-vibe/iron-dominion-3d#readme",
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}
