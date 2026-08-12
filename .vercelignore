@@ -1,0 +1,10 @@
+# The game is index.html plus vendor/ and icons/. Nothing else needs shipping.
+node_modules
+scripts
+shots
+screenshot.png
+screenshot-terrain.png
+CLAUDE.md
+README.md
+package.json
+package-lock.json
