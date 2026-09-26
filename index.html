@@ -5,10 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>IRON DOMINION 3D — Armoured Warfare</title>
 
-<!-- Three.js is vendored rather than pulled from a CDN: the game must stay
-     playable offline as an installed PWA, and the headless screenshot harness
-     loads the page over file:// with no network. -->
-<script src="vendor/three.min.js"></script>
+<!-- Three.js r186, as ES modules. It is vendored (the official npm build files,
+     byte for byte) rather than pulled from a CDN so the game keeps working as an
+     installed PWA with no network; the version is in the path because /vendor is
+     served immutable. Modules do not load over file://, so run it from a server:
+     `npm run serve`. -->
+<script type="importmap">
+{ "imports": { "three": "./vendor/three-0.186.1/three.module.js" } }
+</script>
+<link rel="modulepreload" href="vendor/three-0.186.1/three.module.js">
+<link rel="modulepreload" href="vendor/three-0.186.1/three.core.js">
 
 <!-- Home-screen / PWA icons -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -265,8 +271,11 @@
   </div>
   <div id="splashver">DOMINION BATTLENET v2.00 &middot; 3D</div>
 </div>
-<script>
-"use strict";
+<script type="module">
+/* The game is one ES module, so nothing it declares lands on window. The only
+   deliberate way in from outside is the window.ID3 test hook near the bottom. */
+import * as THREE from 'three';
+
 /* ================= CONSTANTS ================= */
 const TILE=32, MAPW=72, MAPH=72;
 const WORLD=MAPW*TILE;                 // the battlefield is square, 2304 units a side
@@ -2927,13 +2936,15 @@ function shroudify(mat){
   return mat;
 }
 /* ---- colour space ----
-   The renderer writes sRGB, which means Three treats a material's colour as
-   already-linear and gamma-encodes it on the way out. Every hex in this file
-   was picked by eye as an sRGB value, so each one has to be converted going in
-   or the whole palette lifts: mid greys turn to pale putty and the faction gold
-   goes to cream. This one call is the difference between the washed-out look
-   and Iron Dominion's. */
-function col(hex){ return new THREE.Color(hex).convertSRGBToLinear(); }
+   The scene is lit in linear space and the renderer encodes to sRGB on the way
+   out. Every hex in this file was picked by eye as an sRGB value, and Three's
+   colour management (on by default) decodes a hex to linear as it parses it —
+   so col() is just a Color. It stays a named call so that every surface colour
+   still goes through one place: light colours are the exception (see
+   setTheme), and a raw `new THREE.Color` scattered through the models would
+   make that distinction invisible. Decoding twice crushes the palette to
+   near-black; not decoding at all lifts it to pale putty. */
+function col(hex){ return new THREE.Color(hex); }
 
 /* flat: faceted, for rock and machined plate. glow: unlit emissive, for lamps,
    ore and holograms — these must not go grey when the sun is low. */
@@ -3384,18 +3395,25 @@ const R3D=(function(){
   /* ---- renderer ---- */
   const renderer=new THREE.WebGLRenderer({canvas:view,antialias:true,powerPreference:'high-performance'});
   renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
-  renderer.outputEncoding=THREE.sRGBEncoding;
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
   renderer.toneMapping=THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled=true;
-  renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+  /* PCFSoftShadowMap is gone as of r18x; PCFShadowMap now does the soft filter. */
+  renderer.shadowMap.type=THREE.PCFShadowMap;
   const scene=new THREE.Scene();
   const camera=new THREE.PerspectiveCamera(36,1,6,7000);
   camera.rotation.order='YXZ';
   let dist=720;
 
-  const hemi=new THREE.HemisphereLight(0x8a7a63,0x35301f,0.55); scene.add(hemi);
-  const amb=new THREE.AmbientLight(0x2a2419,0.5); scene.add(amb);
-  const sun=new THREE.DirectionalLight(0xffd6a0,1.25);
+  /* The THEMES intensities were graded under Three's old non-physical lighting,
+     which folded a factor of pi into every light. Physical lighting is now the
+     only mode, so the grade is carried across with that factor made explicit
+     rather than by re-tuning four theatres by eye. */
+  const LIGHT_UNIT=Math.PI;
+  /* Colours and intensities are all set by setTheme(); every mission applies one. */
+  const hemi=new THREE.HemisphereLight(); scene.add(hemi);
+  const amb=new THREE.AmbientLight(); scene.add(amb);
+  const sun=new THREE.DirectionalLight();
   sun.castShadow=true;
   /* The shadow camera is a box that rides with the view rather than covering
      the whole 2304-unit map: at map scale a 2048 map would give ~1 texel per
@@ -3412,13 +3430,13 @@ const R3D=(function(){
      there looks like a bug. */
   const skyMat=new THREE.ShaderMaterial({
     side:THREE.BackSide, depthWrite:false, fog:false,
-    uniforms:{uTop:{value:new THREE.Color(0x40372c)},uBot:{value:new THREE.Color(0x6b563c)}},
+    uniforms:{uTop:{value:new THREE.Color()},uBot:{value:new THREE.Color()}},   // graded by setTheme()
     vertexShader:'varying float vY;void main(){vY=normalize(position).y;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
     fragmentShader:'uniform vec3 uTop;uniform vec3 uBot;varying float vY;void main(){gl_FragColor=vec4(mix(uBot,uTop,smoothstep(-0.08,0.55,vY)),1.0);}',
   });
   const sky=new THREE.Mesh(new THREE.SphereGeometry(4200,24,16),skyMat);
   sky.frustumCulled=false; scene.add(sky);
-  scene.fog=new THREE.Fog(0x6b563c,700,2900);
+  scene.fog=new THREE.Fog(0x000000,700,2900);   // colour and range graded by setTheme()
 
   /* ---- ground textures ----
      All three share one UV convention — u = x/WORLD, v = z/WORLD, flipY off —
@@ -3433,14 +3451,15 @@ const R3D=(function(){
     return t;
   }
   const terraTex=groundTex(terraCan,false);
-  terraTex.encoding=THREE.sRGBEncoding;
+  terraTex.colorSpace=THREE.SRGBColorSpace;
   const decalTex=groundTex(decalCan,true);
-  const shroudTex=groundTex(fogCan,true);
+  decalTex.colorSpace=THREE.SRGBColorSpace;   // painted scorch colour, mixed into albedo
+  const shroudTex=groundTex(fogCan,true);      // data, not colour: only its alpha is read
   /* Reused as the upload staging buffer for single-tile albedo repaints, so a
      mined-out ore seam costs a 32x32 texSubImage rather than a 21 MB re-upload. */
   const patchCan=mkCan(TILE,TILE), patchCtx=patchCan.getContext('2d');
   const patchTex=groundTex(patchCan,true);
-  patchTex.encoding=THREE.sRGBEncoding;
+  patchTex.colorSpace=THREE.SRGBColorSpace;
   let decalDirtyAt=0;
 
   SHROUD.uShroud.value=shroudTex;
@@ -3454,7 +3473,7 @@ const R3D=(function(){
     sh.fragmentShader='uniform sampler2D uDecal;\n'+sh.fragmentShader;
     sh.fragmentShader=sh.fragmentShader.replace('#include <map_fragment>',
       `#include <map_fragment>
-       vec4 dcl = texture2D( uDecal, vUv );
+       vec4 dcl = texture2D( uDecal, vMapUv );   // same UVs as the albedo, by construction
        diffuseColor.rgb = mix( diffuseColor.rgb, dcl.rgb, dcl.a );`);
   };
 
@@ -3651,7 +3670,7 @@ const R3D=(function(){
     let s=view.userData.flashShell;
     if(amt<=0.01){ if(s)s.visible=false; return; }
     if(!s){
-      s=new THREE.Mesh(G_SPH,new THREE.MeshBasicMaterial({color:0xff7850,transparent:true,
+      s=new THREE.Mesh(G_SPH,new THREE.MeshBasicMaterial({color:col('#ff7850'),transparent:true,
         opacity:0.4,blending:THREE.AdditiveBlending,depthWrite:false}));
       const r=view.userData.hitR||18;
       s.scale.set(r*2,r*1.6,r*2); s.position.y=r*0.7;
@@ -3749,7 +3768,7 @@ const R3D=(function(){
     const g=x.createRadialGradient(32,32,0,32,32,32);
     for(const [p,col] of stops)g.addColorStop(p,col);
     x.fillStyle=g; x.fillRect(0,0,64,64);
-    const t=new THREE.CanvasTexture(c); t.needsUpdate=true; return t;
+    const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; t.needsUpdate=true; return t;
   }
   const TEX_FIRE=radialTex([[0,'rgba(255,246,220,1)'],[0.32,'rgba(255,170,60,0.92)'],
                             [0.72,'rgba(200,60,20,0.38)'],[1,'rgba(120,30,10,0)']]);
@@ -3975,7 +3994,7 @@ const R3D=(function(){
       patchCtx.clearRect(0,0,TILE,TILE);
       patchCtx.drawImage(terraCan,tx*TILE,ty*TILE,TILE,TILE,0,0,TILE,TILE);
       patchTex.needsUpdate=true;
-      try{ renderer.copyTextureToTexture(new THREE.Vector2(tx*TILE,ty*TILE),patchTex,terraTex); }
+      try{ renderer.copyTextureToTexture(patchTex,terraTex,null,new THREE.Vector2(tx*TILE,ty*TILE)); }
       catch(e){ terraTex.needsUpdate=true; }
       scatterDirty=true;
     },
@@ -3989,11 +4008,13 @@ const R3D=(function(){
       skyMat.uniforms.uBot.value.copy(col(t.hz));
       scene.fog.color.copy(col(t.hz)); scene.fog.near=t.fogN; scene.fog.far=t.fogF;
       /* Light colours are multipliers on already-linear surface colour, not
-         rendered values, so they are set raw. Converting these as well is what
-         crushed the first grade to near-black silhouettes. */
-      sun.color.setHex(t.sun); sun.intensity=t.sunI;
-      hemi.color.setHex(t.hemiS); hemi.groundColor.setHex(t.hemiG); hemi.intensity=t.hemiI;
-      amb.color.setHex(t.amb); amb.intensity=t.ambI;
+         rendered values, so they are taken as linear rather than decoded from
+         sRGB. Decoding these as well is what crushed the first grade to
+         near-black silhouettes. */
+      const LIN=THREE.LinearSRGBColorSpace;
+      sun.color.setHex(t.sun,LIN); sun.intensity=t.sunI*LIGHT_UNIT;
+      hemi.color.setHex(t.hemiS,LIN); hemi.groundColor.setHex(t.hemiG,LIN); hemi.intensity=t.hemiI*LIGHT_UNIT;
+      amb.color.setHex(t.amb,LIN); amb.intensity=t.ambI*LIGHT_UNIT;
       renderer.toneMappingExposure=t.exp;
       sunDir.set(t.sunDir[0],t.sunDir[1],t.sunDir[2]).normalize();
       return t.name;
@@ -4818,6 +4839,21 @@ window.ID3={
   spawn(owner,type,tx,ty){ return addUnit(owner,type,(tx+0.5)*TILE,(ty+0.5)*TILE); },
   build(owner,type,tx,ty){ const b=addBuilding(owner,type,tx,ty); b.built=1; return b; },
   theme(i){ return R3D.setTheme(i); },
+  /* The simulation as the smoke test sees it. The game is a module, so its
+     state is not on window; this is the whole surface a test may touch, and
+     the rebindable fields are accessors so a test that writes `selection` or
+     `camX` changes the live binding rather than a copy. */
+  sim:{
+    TILE, MAPW, MAPH, PLAYER, ENEMY,
+    get units(){ return units; },
+    get buildings(){ return buildings; },
+    get explored(){ return explored; },
+    get selection(){ return selection; }, set selection(v){ selection=v; },
+    get placing(){ return placing; },     set placing(v){ placing=v; },
+    get camX(){ return camX; },           set camX(v){ camX=v; },
+    get camY(){ return camY; },           set camY(v){ camY=v; },
+    canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
+  },
 };
 
 function setup(){

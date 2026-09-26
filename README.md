@@ -5,8 +5,10 @@ A classic base-building RTS — harvest, expand, hold the line — rendered as r
 [Iron Dominion](https://github.com/jackpepper-vibe/iron-dominion), same war,
 different camera.
 
-The whole game is one self-contained `index.html` with Three.js vendored
-alongside it. No build step, no server, no external assets. Open the file.
+The whole game is one `index.html` ES module with Three.js (r186) vendored
+alongside it. No build step and no external assets — but browsers will not load
+modules from `file://`, so serve the folder: `npm run serve`, then open
+http://localhost:5173/.
 
 ![A base at work](screenshot.png)
 
@@ -82,10 +84,12 @@ node scripts/smoke.mjs           # functional test
 ```
 
 `window.ID3` is the test hook — drop into any mission, park the camera, spawn
-units, step the simulation without waiting on frames:
+units, step the simulation without waiting on frames. The game's own state is
+module-scoped; `ID3.sim` is the one sanctioned view of it for tests:
 
 ```
-node C:/Claude/Tools/shot/shot.mjs ./index.html --viewport 1280x800 --wait 2500 \
+npm run serve   # in another terminal: http://localhost:5173/
+node C:/Claude/Tools/shot/shot.mjs http://localhost:5173/index.html --viewport 1280x800 --wait 2500 \
   --eval "document.getElementById('splash').style.display='none';document.getElementById('intro').style.display='none';ID3.mission(0,true)" \
   --eval "ID3.find('conyard',480)" --out shots/base.png
 ```

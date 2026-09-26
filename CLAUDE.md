@@ -10,10 +10,28 @@ whether the 2D original has it too.
 
 ## Shape of the code
 
-Still a single self-contained `index.html`, no build step. Three.js is
-**vendored** at `vendor/three.min.js` rather than pulled from a CDN — the game
-has to work offline as an installed PWA, and the screenshot harness loads the
-page over `file://` with no network.
+Still a single `index.html`, no build step. The inline game script is an **ES
+module** (`<script type="module">`, `import * as THREE from 'three'`), resolved
+by an import map to Three.js **r186 vendored** under `vendor/three-0.186.1/` —
+the official npm `build/three.module.js` + `three.core.js`, unmodified. Vendored
+rather than CDN so the installed PWA works offline; the version is in the
+directory name because `vercel.json` serves `/vendor/*` as `immutable`, so an
+upgrade must land at a new path or returning players keep the old build.
+
+Upgrading Three: `npm pack three@<v>`, copy `build/three.module.js`,
+`build/three.core.js` and `LICENSE` into `vendor/three-<v>/`, repoint the
+import map and the two `modulepreload` links, delete the old directory. There
+are no official minified builds any more; don't use jsDelivr's on-the-fly
+`.min.js`, which imports the unminified core anyway.
+
+**It must be served.** Browsers refuse module scripts over `file://`.
+`npm run serve` (scripts/serve.mjs) serves on :5173; the harnesses start their
+own instance on a free port.
+
+**Module scope.** Nothing the game declares is on `window`. Tests reach the
+simulation only through `ID3.sim` (accessors for `selection`, `placing`,
+`camX`/`camY` so writes hit the live bindings). If a test needs more, add it
+there deliberately rather than leaking globals.
 
 The file is in two halves, and the line between them matters:
 
@@ -24,11 +42,9 @@ The file is in two halves, and the line between them matters:
   that one-way is what made the port tractable — if you find yourself wanting to
   write to `units` or `terrain` from the renderer, the design has gone wrong.
 
-Build to verify by syntax-checking the inline script:
-
-```
-node -e "const fs=require('fs');const h=fs.readFileSync('index.html','utf8');const re=/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g;let m,ok=true;while((m=re.exec(h))){try{new Function(m[1])}catch(e){console.log('ERR:',e.message);ok=false}}console.log(ok?'OK':'FAIL')"
-```
+Build to verify with `npm run check` (scripts/check.mjs): parses the inline
+module as a module, validates the import map, and checks every vendored path it
+and the `modulepreload` links name.
 
 ## Things that will bite you
 
@@ -51,11 +67,17 @@ lets marquee select, the placement ghost, edge scroll and the radar stay simple
 and predictable. `R3D` is written so unlocking yaw later is contained, but
 everything that consumes `panScale()` and `viewCorners()` would need revisiting.
 
-**Colour space.** The renderer writes sRGB, so Three treats material colours as
-already-linear. Every hex in this file is picked by eye as sRGB and must go
-through `col()`. Skipping it lifts the whole palette to pale putty — that was
-the single biggest visual bug during the port. Light colours are the exception:
-they are multipliers, and are set raw.
+**Colour space.** Three's colour management is on: a hex is decoded from sRGB
+to linear as it is parsed, and the renderer encodes back to sRGB. Surface
+colours go through `col()` (now just `new THREE.Color`, kept as the one choke
+point). Light colours are the exception — they are multipliers and are set as
+linear (`setHex(hex, LinearSRGBColorSpace)`). Colour canvases used as textures
+get `colorSpace = SRGBColorSpace`; the shroud is data and does not.
+
+**Light units.** The theme intensities were graded under r128's legacy lighting,
+which r165 removed. `setTheme()` multiplies by `LIGHT_UNIT` (pi) to carry that
+grade across unchanged. Grade new lights in physical units and leave the factor
+out.
 
 **Fog of war is a shader, not an overlay.** `shroudify()` patches every world
 material with the same shroud sampled by world XZ. Any new material that appears
@@ -68,6 +90,7 @@ Screenshots and a smoke test. Do not describe a visual change as done by
 reasoning when you can capture it.
 
 ```
+npm run serve                   # http://localhost:5173/
 node scripts/shot.mjs           # mission 1, normal fog
 node scripts/shot.mjs 2 reveal  # mission 3, whole map explored
 node scripts/smoke.mjs          # picking, orders, marquee, placement, shroud, saves
@@ -75,10 +98,11 @@ node scripts/smoke.mjs          # picking, orders, marquee, placement, shroud, s
 
 `window.ID3` is the test hook — `mission(i, revealAll)`, `cam(x,y,dist)`,
 `look(tx,ty,dist)`, `find(type,dist)`, `spawn`, `build`, `step(n,dt)`,
-`theme(i)`. Drive arbitrary states with the shared shot tool:
+`theme(i)`, and `sim` (the simulation state tests may touch). Drive arbitrary
+states with the shared shot tool against a running `npm run serve`:
 
 ```
-node C:/Claude/Tools/shot/shot.mjs ./index.html --viewport 1280x800 --wait 2500 \
+node C:/Claude/Tools/shot/shot.mjs http://localhost:5173/index.html --viewport 1280x800 --wait 2500 \
   --eval "document.getElementById('splash').style.display='none';document.getElementById('intro').style.display='none';ID3.mission(0,true)" \
   --eval "ID3.find('conyard',480)" --out shots/base.png
 ```

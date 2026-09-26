@@ -10,11 +10,14 @@
  * Fails on any page error, any WebGL/shader warning, or any assertion below.
  */
 import { chromium } from 'playwright';
-import { pathToFileURL } from 'node:url';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startServer } from './serve.mjs';
 
+/* The game is an ES module: it is served (file:// will not load modules), and
+ * its state is reached through the ID3.sim facade rather than as globals. */
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const server = await startServer({ root });
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
@@ -33,7 +36,7 @@ const check = (name, pass, detail = '') => {
   console.log(`${pass ? ' ok ' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`);
 };
 
-await page.goto(pathToFileURL(resolve(root, 'index.html')).href);
+await page.goto(`${server.origin}/index.html`);
 await page.waitForFunction('typeof ID3 === "object"');
 await page.evaluate(() => {
   document.getElementById('splash').style.display = 'none';
@@ -44,6 +47,7 @@ await page.waitForTimeout(900);
 
 /* ---- the heightfield actually has relief, and the sim agrees with it ---- */
 const relief = await page.evaluate(() => {
+  const { MAPW, MAPH, TILE } = ID3.sim;
   let mn = 1e9, mx = -1e9;
   for (let ty = 0; ty < MAPH; ty += 2) for (let tx = 0; tx < MAPW; tx += 2) {
     const h = ID3.R3D.groundH(tx * TILE + 16, ty * TILE + 16);
@@ -66,7 +70,8 @@ check('screen->ground->screen round-trips', round && round.err < 3,
 
 /* ---- clicking a unit selects it (raycast against the model) ---- */
 const sel = await page.evaluate(async () => {
-  const u = units.find(x => x.owner === PLAYER && x.type !== 'harvester') || units[0];
+  const S = ID3.sim, view = document.getElementById('view');
+  const u = S.units.find(x => x.owner === S.PLAYER && x.type !== 'harvester') || S.units[0];
   ID3.cam(u.x, u.y, 500);
   ID3.R3D.render(0);
   const p = ID3.R3D.project(u.x, ID3.R3D.groundH(u.x, u.y) + 8, u.y);
@@ -74,14 +79,15 @@ const sel = await page.evaluate(async () => {
     bubbles: true, button: b, clientX: p.x, clientY: p.y }));
   fire('mousedown', 0);
   window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: p.x, clientY: p.y }));
-  return { picked: selection.length, wanted: u.type, got: selection[0] && selection[0].type };
+  return { picked: S.selection.length, wanted: u.type, got: S.selection[0] && S.selection[0].type };
 });
 check('click selects the unit under the cursor', sel.picked === 1 && sel.got === sel.wanted,
   `${sel.picked} selected (${sel.got})`);
 
 /* ---- right-click issues a move order to the ground that was clicked ---- */
 const order = await page.evaluate(() => {
-  const u = selection[0];
+  const S = ID3.sim, view = document.getElementById('view');
+  const u = S.selection[0];
   const tgt = { x: u.x + 130, y: u.y - 90 };
   const p = ID3.R3D.project(tgt.x, ID3.R3D.groundH(tgt.x, tgt.y), tgt.y);
   view.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, clientX: p.x, clientY: p.y }));
@@ -92,8 +98,9 @@ check('right-click orders a move to that ground', order && order.d < 60,
 
 /* ---- marquee selection is a screen rectangle ---- */
 const marquee = await page.evaluate(() => {
-  selection = [];
-  const mine = units.filter(u => u.owner === PLAYER);
+  const S = ID3.sim, view = document.getElementById('view');
+  S.selection = [];
+  const mine = S.units.filter(u => u.owner === S.PLAYER);
   const c = mine[0];
   ID3.cam(c.x, c.y, 900);
   ID3.R3D.render(0);
@@ -106,18 +113,19 @@ const marquee = await page.evaluate(() => {
     const p = ID3.R3D.project(u.x, ID3.R3D.groundH(u.x, u.y) + 8, u.y);
     return p.z < 1 && p.x >= 0 && p.x <= 1280 && p.y >= 0 && p.y <= 800;
   }).length;
-  return { sel: selection.length, onScreen };
+  return { sel: S.selection.length, onScreen };
 });
 check('marquee selects what is visibly inside it', marquee.sel > 0 && marquee.sel <= marquee.onScreen,
   `${marquee.sel} of ${marquee.onScreen} on screen`);
 
 /* ---- placement: ghost follows the ground, and the click lands the building ---- */
 const place = await page.evaluate(() => {
-  const yard = buildings.find(b => b.owner === PLAYER && b.type === 'conyard');
+  const S = ID3.sim, view = document.getElementById('view'), { TILE } = S;
+  const yard = S.buildings.find(b => b.owner === S.PLAYER && b.type === 'conyard');
   ID3.cam(yard.x, yard.y, 480);
   ID3.R3D.render(0);
-  placing = 'power';
-  const before = buildings.length;
+  S.placing = 'power';
+  const before = S.buildings.length;
   /* Find ground the game itself considers legal rather than assuming a tile is
      free — the starting units are parked right around the yard. */
   let spot = null;
@@ -125,16 +133,16 @@ const place = await page.evaluate(() => {
     for (let dy = -r; dy <= r && !spot; dy++)
       for (let dx = -r; dx <= r && !spot; dx++) {
         const tx = yard.tx + dx, ty = yard.ty + dy;
-        if (canPlace('power', tx, ty, PLAYER)) spot = { tx, ty };
+        if (S.canPlace('power', tx, ty, S.PLAYER)) spot = { tx, ty };
       }
   if (!spot) return { added: 0, last: null, placingCleared: false, spot: null };
   const { tx, ty } = spot;
   const wx = (tx + 1) * TILE, wy = (ty + 1) * TILE;
   const p = ID3.R3D.project(wx, ID3.R3D.groundH(wx, wy), wy);
   view.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: p.x, clientY: p.y }));
-  const added = buildings.length - before;
-  return { added, placingCleared: placing === null, spot,
-           last: added ? buildings[buildings.length - 1].type : null };
+  const added = S.buildings.length - before;
+  return { added, placingCleared: S.placing === null, spot,
+           last: added ? S.buildings[S.buildings.length - 1].type : null };
 });
 check('placement click builds the structure', place.added === 1 && place.last === 'power' && place.placingCleared,
   `added ${place.added} (${place.last}) at ${place.spot ? place.spot.tx + ',' + place.spot.ty : 'nowhere legal'}`);
@@ -151,15 +159,16 @@ check('instanced scatter is shrouded like the ground',
 
 /* ---- a burst of combat does not leak views or throw ---- */
 const churn = await page.evaluate(() => {
-  const before = { b: buildings.length, u: units.length };
+  const S = ID3.sim;
+  const before = { b: S.buildings.length, u: S.units.length };
   for (let i = 0; i < 12; i++) ID3.spawn(1, 'tank', 20 + i, 30);
   ID3.step(120, 1 / 30);
-  units.filter(u => u.owner === ENEMY).slice(0, 8).forEach(u => { u.hp = 0; killEntity(u); });
+  S.units.filter(u => u.owner === S.ENEMY).slice(0, 8).forEach(u => { u.hp = 0; S.killEntity(u); });
   ID3.step(60, 1 / 30);
   ID3.R3D.render(0.033);
   let views = 0;
   ID3.R3D.scene.traverse(o => { if (o.userData && o.userData.eid !== undefined) views++; });
-  return { before, after: { b: buildings.length, u: units.length }, views };
+  return { before, after: { b: S.buildings.length, u: S.units.length }, views };
 });
 check('entity views track the sim through churn',
   churn.views <= churn.after.b + churn.after.u,
@@ -167,17 +176,19 @@ check('entity views track the sim through churn',
 
 /* ---- save / restore survives the new camera semantics ---- */
 const save = await page.evaluate(() => {
-  camX = 900; camY = 1200;
-  saveGame('test');
-  camX = 0; camY = 0;
-  const okLoad = loadGame();
-  return { okLoad, camX, camY };
+  const S = ID3.sim;
+  S.camX = 900; S.camY = 1200;
+  S.saveGame('test');
+  S.camX = 0; S.camY = 0;
+  const okLoad = S.loadGame();
+  return { okLoad, camX: S.camX, camY: S.camY };
 });
 check('save and restore round-trips the camera', save.okLoad !== false && Math.abs(save.camX - 900) < 1,
   `camX=${save.camX}, camY=${save.camY}`);
 
 await page.waitForTimeout(400);
 await browser.close();
+await server.close();
 
 const failed = checks.filter(c => !c.pass);
 if (errors.length) { console.log('\nPAGE ERRORS:\n' + errors.join('\n')); }
