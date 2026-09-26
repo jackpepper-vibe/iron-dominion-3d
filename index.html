@@ -478,7 +478,7 @@ let tick=0, lastAttackWarn=-999;
    cost  : A* multiplier - >1 is avoided when a detour is cheap
    speed : movement multiplier once travelling over it
    radar : minimap colour */
-const T_OPEN=0, T_ROCK=1, T_ORE=2, T_CLIFF=3, T_TREE=4, T_SCRUB=5, T_MUD=6, T_ROAD=7;
+const T_OPEN=0, T_ROCK=1, T_ORE=2, T_CLIFF=3, T_TREE=4, T_SCRUB=5, T_MUD=6, T_ROAD=7, T_WATER=8, T_BRIDGE=9, T_FORD=10;
 const TDEF=[
   /*0 open */ {pass:true, build:true,  cost:1,   speed:1,    radar:'#22301f'},
   /*1 rock */ {pass:false,build:false, cost:1,   speed:1,    radar:'#3c3f44'},
@@ -488,7 +488,11 @@ const TDEF=[
   /*5 scrub*/ {pass:true, build:true,  cost:1.15,speed:0.92, radar:'#2b3a22'},
   /*6 mud  */ {pass:true, build:true,  cost:2.2, speed:0.58, radar:'#3a3524'},
   /*7 road */ {pass:true, build:true,  cost:0.55,speed:1.30, radar:'#4a4638'},
+  /*8 water*/ {pass:false,build:false, cost:1,   speed:1,    radar:'#1f4f72'},
+  /*9 bridge*/{pass:true, build:false, cost:0.6, speed:1.25, radar:'#7a6e58'},
+  /*10 ford*/ {pass:true, build:false, cost:2.6, speed:0.50, radar:'#2e6a86'},
 ];
+const isWet=t=>t===T_WATER||t===T_FORD||t===T_BRIDGE;   // river channel, whatever crosses it
 function idx(tx,ty){return ty*MAPW+tx;}
 function inMap(tx,ty){return tx>=0&&ty>=0&&tx<MAPW&&ty<MAPH;}
 function passable(tx,ty){return inMap(tx,ty)&&TDEF[terrain[idx(tx,ty)]].pass&&occ[idx(tx,ty)]===0;}
@@ -520,7 +524,7 @@ function nearSite(tx,ty){
 /* roads:false - a paved lane between the bases handed the attacker a fast, obvious
    approach and blunted the passes. The road terrain kind is still supported; set
    roads:true on a mission that wants one. */
-const LAND_DEFAULT={mountain:0.62, ridges:2, passes:3, trees:0.30, scrub:0.55, mud:0.10, roads:false, boulders:26};
+const LAND_DEFAULT={mountain:0.62, ridges:2, passes:3, trees:0.30, scrub:0.55, mud:0.10, roads:false, boulders:26, rivers:0};
 function genMap(seed,land,M){
   const L=Object.assign({},LAND_DEFAULT,land||{});
   siteList=M?missionSites(M):[];
@@ -559,6 +563,9 @@ function genMap(seed,land,M){
       carveDisc(px,py,4+(rng()*2|0));
     }
   }
+  /* --- rivers: meander across the base-to-base axis, cutting through
+     whatever they meet except the mission sites; each gets bridges --- */
+  for(let r=0;r<L.rivers;r++)carveRiver(rng,r,L.rivers);
   /* --- boulder fields (the old scatter, kept as texture, not as structure) --- */
   for(let i=0;i<L.boulders;i++){
     const cx=6+Math.floor(rng()*(MAPW-12)), cy=6+Math.floor(rng()*(MAPH-12));
@@ -592,7 +599,7 @@ function genMap(seed,land,M){
       const d=Math.hypot(dx,dy);
       if(d<=r&&rng()>d/r*0.85){
         const tx=fx+dx,ty=fy+dy;
-        if(inMap(tx,ty)&&TDEF[terrain[idx(tx,ty)]].pass){
+        if(inMap(tx,ty)&&TDEF[terrain[idx(tx,ty)]].pass&&!isWet(terrain[idx(tx,ty)])){   // never pave a crossing with ore
           terrain[idx(tx,ty)]=T_ORE;oreAmt[idx(tx,ty)]=400+Math.floor(rng()*400);
         }
       }
@@ -606,7 +613,66 @@ function carveDisc(cx,cy,r){
   for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){
     if(dx*dx+dy*dy>r*r)continue;
     const tx=cx+dx,ty=cy+dy;
-    if(inMap(tx,ty)&&!TDEF[terrain[idx(tx,ty)]].pass)terrain[idx(tx,ty)]=T_OPEN;
+    if(!inMap(tx,ty))continue;
+    const k=idx(tx,ty);
+    /* a corridor through a river is a ford, not dry land */
+    if(!TDEF[terrain[k]].pass)terrain[k]=terrain[k]===T_WATER?T_FORD:T_OPEN;
+  }
+}
+/* A river runs across the map from the north/west edge to the south/east
+   edge — across the line between the two bases, so it is always something
+   to cross. The channel meanders on two sine terms and is two to three tiles
+   wide; mission sites stay dry. Two bridges are laid square across it, each
+   extended bank to bank so it always lands on dry ground. */
+function carveRiver(rng,r,n){
+  const f=(r+1)/(n+1), steps=400;
+  /* the axis runs NW->SE, perpendicular to the SW->NE line between the bases */
+  const x0=MAPW*(f*0.9-0.25), y0=-4, x1=MAPW*(f*0.9+0.75), y1=MAPH+4;
+  const course=(meander,ph,width,shift)=>{
+    const along=[], cells=new Map();
+    for(let i=0;i<=steps;i++){
+      const t=i/steps, bx=x0+(x1-x0)*t+shift, by=y0+(y1-y0)*t-shift;
+      const off=Math.sin(t*6.283*1.6+ph)*meander+Math.sin(t*6.283*3.7+ph*2)*meander*0.35;
+      const cx=bx+off*0.72, cy=by-off*0.72;
+      along.push([cx,cy]);
+      const w=width*(0.85+0.3*Math.sin(t*19+ph));
+      for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++){
+        const tx=Math.round(cx+dx), ty=Math.round(cy+dy);
+        if(inMap(tx,ty)&&Math.hypot(tx-cx,ty-cy)<=w)cells.set(idx(tx,ty),[tx,ty]);
+      }
+    }
+    return {along,cells};
+  };
+  /* Mission sites must stay dry, and the enemy base moves every play, so try
+     a dozen courses and keep the one that runs clearest of them. */
+  let best=null, bestHits=1e9;
+  for(let c=0;c<12;c++){
+    const cand=course(5+rng()*4,rng()*6.28,1.1+rng()*0.6,(rng()-0.5)*16);
+    let hits=0; for(const [,[tx,ty]] of cand.cells)if(nearSite(tx,ty))hits++;
+    if(hits<bestHits){bestHits=hits;best=cand;}
+    if(!hits)break;
+  }
+  const {along,cells}=best;
+  /* where it must pass a site it runs on as a ford: a river never simply stops */
+  for(const [k,[tx,ty]] of cells){ terrain[k]=nearSite(tx,ty)?T_FORD:T_WATER; oreAmt[k]=0; }
+  for(const t of [0.3+rng()*0.08,0.64+rng()*0.08]){
+    const i=Math.round(t*steps), [cx,cy]=along[i], [ax,ay]=along[Math.min(steps,i+4)];
+    /* square to the flow: the bridge axis is the flow direction turned 90 degrees */
+    let dx=-(ay-cy), dy=ax-cx; const L=Math.hypot(dx,dy)||1; dx/=L; dy/=L;
+    const axisX=Math.abs(dx)>Math.abs(dy);          // bridges run along a grid axis
+    const sx=axisX?Math.sign(dx):0, sy=axisX?0:Math.sign(dy);
+    const lay=(ox,oy)=>{                            // one lane, extended until both banks are dry
+      for(const dir of [1,-1]){
+        for(let k=0;k<12;k++){
+          const tx=Math.round(cx+ox+sx*dir*k), ty=Math.round(cy+oy+sy*dir*k);
+          if(!inMap(tx,ty))break;
+          const q=idx(tx,ty);
+          if(terrain[q]!==T_WATER&&terrain[q]!==T_BRIDGE)break;
+          terrain[q]=T_BRIDGE;
+        }
+      }
+    };
+    lay(0,0); lay(axisX?0:1,axisX?1:0);             // two lanes wide
   }
 }
 /* BFS over passable ground from the player's home box. */
@@ -715,8 +781,31 @@ function sampleF(F,px,py){
    Because it is computed from the terrain array itself, the relief always
    agrees with passability — after the connectivity carve, after a mission's
    site clearances, and when a save is restored. Rebuilt by renderTerrainAll. */
-let EF=null;
+let EF=null, WF=null;
+const RIVER_DEPTH=22;                     // how far a full channel sits below the banks
+/* River field: 1 in open water, less over fords, blurred into banks. Built
+   first because it also flattens the valley the river runs through. */
+function buildWaterField(){
+  WF=new Float32Array(NW*NH);
+  let any=false;
+  for(let gy=0;gy<NH;gy++)for(let gx=0;gx<NW;gx++){
+    const tx=Math.min(MAPW-1,(gx*NRES/TILE)|0), ty=Math.min(MAPH-1,(gy*NRES/TILE)|0), t=terrain[idx(tx,ty)];
+    const v=t===T_WATER||t===T_BRIDGE?1:t===T_FORD?0.42:0;
+    WF[gy*NW+gx]=v; if(v)any=true;
+  }
+  if(!any)return;
+  const tmp=new Float32Array(NW*NH), R=2, span=2*R+1;
+  for(let pass=0;pass<2;pass++){
+    for(let y=0;y<NH;y++){ let acc=0;
+      for(let x=-R;x<=R;x++)acc+=WF[y*NW+Math.max(0,Math.min(NW-1,x))];
+      for(let x=0;x<NW;x++){ tmp[y*NW+x]=acc/span; acc+=WF[y*NW+Math.min(NW-1,x+R+1)]-WF[y*NW+Math.max(0,x-R)]; } }
+    for(let x=0;x<NW;x++){ let acc=0;
+      for(let y=-R;y<=R;y++)acc+=tmp[Math.max(0,Math.min(NH-1,y))*NW+x];
+      for(let y=0;y<NH;y++){ WF[y*NW+x]=acc/span; acc+=tmp[Math.min(NH-1,y+R+1)*NW+x]-tmp[Math.max(0,y-R)*NW+x]; } }
+  }
+}
 function buildElevation(){
+  buildWaterField();
   EF=new Float32Array(NW*NH);
   let any=false;
   for(let k=0;k<terrain.length;k++)if(terrain[k]===T_CLIFF){any=true;break;}
@@ -788,6 +877,8 @@ function buildElevation(){
     }
     EF[i]=Math.max(0,Math.min(1,e));
   }
+  /* a river cuts its valley down through whatever it crosses */
+  for(let i=0;i<EF.length;i++)if(WF[i]>0)EF[i]*=1-Math.min(1,WF[i]*1.6);
 }
 /* Terrace the raw elevation into benches joined by steep scarps. The first
    scarp starts right at the passable boundary (0.48), so the cliff wall the
@@ -825,7 +916,7 @@ function paintSplat(){
     const e=EF?sampleF(EF,ax,ay):0;
     /* soil: the dry patches, plus the gravel apron of foothills and boulders */
     const talus=Math.max(0,Math.min(1,(e-0.20)/0.12))*0.7;
-    const soil=Math.max(soilAt(ax,ay),talus,t===T_ROCK?0.8:0);
+    const soil=Math.max(soilAt(ax,ay),talus,t===T_ROCK?0.8:0,WF?Math.min(1,sampleF(WF,ax,ay)*2):0);
     const k=(sy*W+sx)*4;
     d[k]=soil*255; d[k+1]=t===T_MUD?255:0; d[k+2]=t===T_ROAD?255:0; d[k+3]=t===T_TREE?255:0;
   }
@@ -879,6 +970,10 @@ function paintGroundTile(tx,ty){
          cracks come from the triplanar rock detail, not from this map */
       const k2=0.22*scarpF(e0);
       r*=1-k2; g*=1-k2; b*=1-k2;
+    }
+    if(WF){                                  // silt bed and wet banks along a river
+      const w=sampleF(WF,ax,ay);
+      if(w>0.05){ const k=Math.min(1,w*1.5); r+=(88-r)*k; g+=(80-g)*k; b+=(58-b)*k; }
     }
     d[i++]=r; d[i++]=g; d[i++]=b; d[i++]=255;
   }
@@ -2343,7 +2438,7 @@ function separation(u){
   }
   // keep out of buildings/rocks
   const tx=u.x/TILE|0, ty=u.y/TILE|0;
-  if(inMap(tx,ty)&&(terrain[idx(tx,ty)]===1||occ[idx(tx,ty)]!==0)){
+  if(inMap(tx,ty)&&(!TDEF[terrain[idx(tx,ty)]].pass||occ[idx(tx,ty)]!==0)){
     // nudge to nearest passable neighbor center
     for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){
       if(passable(tx+dx,ty+dy)){u.x+=dx*2.2;u.y+=dy*2.2;break;}
@@ -4668,7 +4763,7 @@ float groundOre;
   const apron=new THREE.Mesh(new THREE.PlaneGeometry(9000,9000),
     new THREE.MeshBasicMaterial({color:col('#14140f'),fog:true}));
   apron.rotation.x=-Math.PI/2;
-  apron.position.set(WORLD/2,-6,WORLD/2);
+  apron.position.set(WORLD/2,-RIVER_DEPTH-16,WORLD/2);   // below the deepest riverbed, or it hides the water
   apron.renderOrder=-1;
   scene.add(apron);
 
@@ -4676,7 +4771,15 @@ float groundOre;
   function groundH(px,pz){
     if(!EF)return 0;
     const x=Math.max(0,Math.min(WORLD-1,px)), z=Math.max(0,Math.min(WORLD-1,pz));
-    return terr(sampleF(EF,x,z))*HSCALE;
+    return terr(sampleF(EF,x,z))*HSCALE-(WF?sampleF(WF,x,z)*RIVER_DEPTH:0);
+  }
+  /* Where something standing here actually stands: the ground, or a bridge deck. */
+  const WATER_Y=-8, DECK_Y=2.5;
+  function standH(px,pz){
+    const tx=px/TILE|0, tz=pz/TILE|0;
+    if(inMap(tx,tz)&&terrain[idx(tx,tz)]===T_BRIDGE)return Math.max(DECK_Y,groundH(px,pz));
+    if(inMap(tx,tz)&&terrain[idx(tx,tz)]===T_FORD)return Math.max(WATER_Y-3,groundH(px,pz));
+    return groundH(px,pz);
   }
   const gGeo=new THREE.BufferGeometry();
   {
@@ -4726,6 +4829,105 @@ float groundOre;
     }
     sp.needsUpdate=true; shGeo.computeVertexNormals(); shGeo.computeBoundingSphere();
     terraTex.needsUpdate=true;
+  }
+
+  /* ---- water ----
+     One sheet across the whole map at WATER_Y; it only shows where a river
+     has carved the ground below it. Ripples come from two scrolling samples
+     of the grime field turned into a normal; colour and opacity follow the
+     depth field, so shallows show their silt bed and the deep channel goes
+     dark; foam rides the shoreline band of the same field. */
+  const wfData=new Uint8Array(NW*NH*4);
+  const wfTex=new THREE.DataTexture(wfData,NW,NH,THREE.RGBAFormat);
+  wfTex.magFilter=wfTex.minFilter=THREE.LinearFilter;
+  const WATER_TIME=GROUND_TIME;
+  const waterMat=shroudify(new THREE.MeshPhongMaterial({color:col('#17485c'),specular:col('#6f8790'),shininess:90,
+    transparent:true,opacity:0.85,depthWrite:false}));
+  const waterShroud=waterMat.onBeforeCompile;
+  waterMat.onBeforeCompile=sh=>{
+    waterShroud(sh);
+    Object.assign(sh.uniforms,{uWF:{value:wfTex},uRip:SURFACE.uGrime,uWT:WATER_TIME,uWFScale:{value:new THREE.Vector2(1/(NW*NRES),1/(NH*NRES))}});
+    sh.vertexShader='varying vec3 vWW;\n'+sh.vertexShader.replace('#include <fog_vertex>',
+      '#include <fog_vertex>\n vWW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;');
+    sh.fragmentShader=`uniform sampler2D uWF, uRip; uniform float uWT; uniform vec2 uWFScale; varying vec3 vWW;
+`+sh.fragmentShader.replace('#include <normal_fragment_maps>',`#include <normal_fragment_maps>
+       {
+         vec2 p = vWW.xz;
+         float e = 1.2;
+         float h0 = texture2D( uRip, p / 90.0 + vec2( uWT * 0.012, uWT * 0.007 ) ).r
+                  + texture2D( uRip, p / 57.0 - vec2( uWT * 0.009, -uWT * 0.013 ) ).g;
+         float hx = texture2D( uRip, ( p + vec2( e, 0.0 ) ) / 90.0 + vec2( uWT * 0.012, uWT * 0.007 ) ).r
+                  + texture2D( uRip, ( p + vec2( e, 0.0 ) ) / 57.0 - vec2( uWT * 0.009, -uWT * 0.013 ) ).g;
+         float hz = texture2D( uRip, ( p + vec2( 0.0, e ) ) / 90.0 + vec2( uWT * 0.012, uWT * 0.007 ) ).r
+                  + texture2D( uRip, ( p + vec2( 0.0, e ) ) / 57.0 - vec2( uWT * 0.009, -uWT * 0.013 ) ).g;
+         vec3 wn = normalize( vec3( ( h0 - hx ) * 1.1, 1.0, ( h0 - hz ) * 1.1 ) );   // a breeze, not rapids
+         normal = normalize( ( viewMatrix * vec4( wn, 0.0 ) ).xyz );
+       }`).replace('#include <map_fragment>',`#include <map_fragment>
+       {
+         vec2 wf = texture2D( uWF, vWW.xz * uWFScale ).rg;
+         float w = wf.r;
+         diffuseColor.rgb = mix( vec3( 0.16, 0.20, 0.13 ), diffuseColor.rgb, smoothstep( 0.35, 0.8, w ) );
+         diffuseColor.a = mix( 0.45, 0.9, smoothstep( 0.3, 0.85, w ) );
+         float band = smoothstep( 0.30, 0.45, wf.g ) * ( 1.0 - smoothstep( 0.5, 0.68, wf.g ) );
+         float froth = texture2D( uRip, vWW.xz / 23.0 + uWT * 0.02 ).g;
+         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.85, 0.9, 0.88 ), band * smoothstep( 0.45, 0.6, froth ) * 0.8 );
+       }`);
+  };
+  const water=new THREE.Mesh(new THREE.PlaneGeometry(WORLD,WORLD).rotateX(-Math.PI/2),waterMat);
+  water.position.set(WORLD/2,WATER_Y,WORLD/2); water.receiveShadow=true; water.renderOrder=1;
+  water.visible=false; scene.add(water);
+  /* R: depth (the river field). G: shoreline — a blurred wet/dry mask, so
+     foam follows the true bank and never whitens a ford across the channel. */
+  function rebuildWater(){
+    let any=false;
+    const wet=new Float32Array(NW*NH), sh=new Float32Array(NW*NH);
+    for(let gy=0;gy<NH;gy++)for(let gx=0;gx<NW;gx++){
+      const tx=Math.min(MAPW-1,(gx*NRES/TILE)|0), ty=Math.min(MAPH-1,(gy*NRES/TILE)|0);
+      wet[gy*NW+gx]=isWet(terrain[idx(tx,ty)])?1:0;
+    }
+    const R=2;
+    for(let gy=0;gy<NH;gy++)for(let gx=0;gx<NW;gx++){
+      let a=0,n=0;
+      for(let dy=-R;dy<=R;dy++)for(let dx=-R;dx<=R;dx++){
+        const x=gx+dx,y=gy+dy; if(x<0||y<0||x>=NW||y>=NH)continue; a+=wet[y*NW+x]; n++;
+      }
+      sh[gy*NW+gx]=a/n;
+    }
+    for(let i=0;i<NW*NH;i++){
+      const v=WF?Math.min(255,WF[i]*255):0;
+      wfData[i*4]=v; wfData[i*4+1]=sh[i]*255; wfData[i*4+3]=255; if(v>3)any=true;
+    }
+    wfTex.needsUpdate=true; water.visible=any;
+  }
+  /* ---- bridges ----
+     A deck, kerbs and railings per bridge tile, with a pier under every
+     other tile, oriented along the crossing. Merged into one static mesh per
+     material like any structure. */
+  const bridges=new THREE.Group(); scene.add(bridges);
+  function rebuildBridges(){
+    for(const c of bridges.children)c.traverse(o=>{ if(o.isMesh)o.geometry.dispose(); });
+    bridges.clear();
+    const g=new THREE.Group(); let n=0;
+    for(let ty=0;ty<MAPH;ty++)for(let tx=0;tx<MAPW;tx++){
+      if(terrain[idx(tx,ty)]!==T_BRIDGE)continue;
+      const at=(x,y)=>inMap(x,y)?terrain[idx(x,y)]:T_OPEN;
+      /* runs N-S if the river lies to its east/west */
+      const ns=isWet(at(tx-1,ty))&&at(tx-1,ty)!==T_BRIDGE||isWet(at(tx+1,ty))&&at(tx+1,ty)!==T_BRIDGE;
+      const cx=(tx+0.5)*TILE, cz=(ty+0.5)*TILE, y=DECK_Y;
+      const t=new THREE.Group(); t.position.set(cx,0,cz); if(!ns)t.rotation.y=Math.PI/2; g.add(t);
+      blk(t,TILE+0.2,2.2,TILE+0.2,CONC,0,y-2.2,0);                  // deck
+      const edgeL=at(tx+(ns?-1:0),ty+(ns?0:-1))!==T_BRIDGE, edgeR=at(tx+(ns?1:0),ty+(ns?0:1))!==T_BRIDGE;
+      for(const [edge,s2] of [[edgeL,-1],[edgeR,1]]){
+        if(!edge)continue;
+        blk(t,1.6,1.4,TILE,PLATE_D,s2*(TILE/2-0.8),y,0,true);        // kerb
+        blk(t,0.8,0.8,TILE,IRON,s2*(TILE/2-0.8),y+4.2,0,true);       // rail
+        for(const pz of [-10,0,10])blk(t,0.8,4.2,0.8,IRON,s2*(TILE/2-0.8),y,pz,true);
+      }
+      if(n++%2===0)blk(t,TILE*0.6,y-WATER_Y+RIVER_DEPTH,5,CONC,0,-RIVER_DEPTH-6,0,true);   // pier
+    }
+    if(!g.children.length)return;
+    mergeStatic(g,new Set());
+    bridges.add(g);
   }
 
   /* ---- scatter ----
@@ -5185,7 +5387,7 @@ float groundOre;
         entities.add(v); uView.set(u.id,v);
       }
       const d=UDEFS[u.type];
-      const gy=groundH(u.x,u.y);
+      const gy=standH(u.x,u.y);
       /* Aircraft ride a clear two tiles up so their shadow, not the model,
          is what the player reads their position from. */
       v.position.set(u.x, d.fly?gy+34+(u.alt||0)*2.4:gy, u.y);
@@ -5460,7 +5662,7 @@ float groundOre;
   }
 
   return {
-    scene, camera, renderer, groundH, screenToGround, project, screenBox,
+    scene, camera, renderer, groundH, standH, screenToGround, project, screenBox,
     pickEntity, setGhost, clearGhost, HSCALE,
     resize(w,h){
       if(w<2||h<2)return;
@@ -5474,6 +5676,7 @@ float groundOre;
       for(const [,v] of uView)entities.remove(v); uView.clear();
       shroudTex.needsUpdate=true; decalTex.needsUpdate=true;
       splatTex.needsUpdate=true; refreshOre();
+      rebuildWater(); rebuildBridges();
     },
     /* One tile repainted mid-battle (ore mined out, timber burnt). */
     tileChanged(tx,ty){
@@ -5977,7 +6180,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['trooper',MAPW-18,14],['tank',MAPW-14,18]]},
   ai:{income:13,buildInt:7,armyCap:20,waveInt:55,waveFirst:70,waveSize:4,waveCap:10,heavyAt:3600} },
 
-{ code:'OPERATION EMBER \u00b7 PHASE III', name:'ORE WAR', blurb:'Take the central ore basin from a full Scourge war economy.', seed:33, tech:3, land:{mountain:0.73,ridges:1,passes:2,trees:0.40,scrub:0.6,mud:0.22,boulders:24},
+{ code:'OPERATION EMBER \u00b7 PHASE III', name:'ORE WAR', blurb:'Take the central ore basin from a full Scourge war economy.', seed:33, tech:3, land:{mountain:0.73,ridges:1,passes:2,trees:0.40,scrub:0.6,mud:0.22,boulders:24,rivers:1},
   objType:'destroy_all', objShort:'DESTROY ALL ENEMY STRUCTURES',
   brief:"<b>COMMANDER \u2014</b> The relief column has secured our flank. Now both armies bleed for the same prize: the <i>central ore basin</i>. The Scourge runs a full war economy \u2014 refinery, factory, entrenched turrets. Starve them or smash them; either way, nothing of theirs is left standing when you're done.",
   player:pb([],[],3000),
@@ -6022,7 +6225,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['tank',MAPW-14,18],['tank',40,37],['trooper',39,36],['trooper',42,35],['gunship',MAPW-18,12],['gunship',MAPW-14,12]]},
   ai:{income:16,buildInt:6,armyCap:28,waveInt:45,waveFirst:40,waveSize:5,waveCap:15,heavyAt:900} },
 
-{ code:'OPERATION IRONFALL \u00b7 PHASE III', name:'TWIN SERPENTS', blurb:'Two war-camps feed each other men and metal. Destroy both.', seed:118, tech:8, land:{mountain:0.70,ridges:3,passes:2,trees:0.15,scrub:0.35,mud:0.20,boulders:30},
+{ code:'OPERATION IRONFALL \u00b7 PHASE III', name:'TWIN SERPENTS', blurb:'Two war-camps feed each other men and metal. Destroy both.', seed:118, tech:8, land:{mountain:0.70,ridges:3,passes:2,trees:0.15,scrub:0.35,mud:0.20,boulders:30,rivers:1},
   objType:'destroy_all', objShort:'DESTROY BOTH WAR-CAMPS',
   brief:"<b>COMMANDER \u2014</b> The storm is spent, and now we advance. Two Scourge war-camps share the eastern wastes \u2014 one on the <i>northern heights</i>, one dug into the <i>southern flats</i> \u2014 feeding each other men and metal. Strike one and the other answers; besiege both and they bleed together. There is no clever way through this. Tear both serpents out by the root.",
   player:pb([],[['tank',17,MAPH-11],['tank',18,MAPH-9]],4000),
@@ -6614,6 +6817,7 @@ window.ID3={
     canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
     Campaign, showBoard, showBriefing,
     setRepair, sellBuilding, setRally, spawnUnitAt, refreshActions, orderCapture, awardKill, dealDamage,
+    get terrain(){ return terrain; }, T_WATER, T_BRIDGE, T_FORD, findPath,
     canDeploy, deployMCV, launchStrike, readyUplink, swChargeTime, get strikes(){ return strikes; },
     get credits(){ return credits; }, get selectedBuilding(){ return selectedBuilding; },
     set selectedBuilding(v){ selectedBuilding=v; },

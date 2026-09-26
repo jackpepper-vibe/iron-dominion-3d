@@ -82,6 +82,7 @@ const POSES = [
       const S = ID3.sim, c = S.buildings.find(b => b.owner === 1 && b.type === 'conyard');
       ID3.cam(c.x, c.y + 90, 760);
     } },
+  { name: 'river', mission: 7, steps: 10, setup: () => { ID3.cam(1150, 1150, 1500); } },
   { name: 'overview', mission: 1, steps: 30, setup: () => { ID3.cam(1150, 1250, 1500); } },
 ];
 

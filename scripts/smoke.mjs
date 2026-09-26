@@ -347,6 +347,21 @@ check('the uplink charges, and a launched strike warns before it hits',
   sw.notYet && sw.ready && sw.launched && sw.pending, JSON.stringify(sw));
 check('the strike destroys a war factory and the uplink starts recharging', sw.destroyed && sw.recharging);
 
+/* ---- rivers: water and bridges exist, and the bases are still joined by land ---- */
+const river = await page.evaluate(() => {
+  ID3.mission(7, true);                                       // Twin Serpents has a river
+  const S = ID3.sim, T = S.terrain;
+  let water = 0, bridge = 0;
+  for (const t of T) { if (t === S.T_WATER) water++; if (t === S.T_BRIDGE) bridge++; }
+  const home = S.buildings.find(b => b.owner === 0 && b.type === 'conyard');
+  const foe = S.buildings.find(b => b.owner === 1 && b.type === 'conyard');
+  const path = S.findPath(home.tx + 1, home.ty + 3, foe.tx + 1, foe.ty + 3);
+  const wetOnPath = path ? path.filter(([x, y]) => T[y * S.MAPW + x] === S.T_BRIDGE || T[y * S.MAPW + x] === S.T_FORD).length : -1;
+  return { water, bridge, path: !!path, wetOnPath };
+});
+check('a river map has water and bridges, and the bases are joined by land',
+  river.water > 40 && river.bridge >= 2 && river.path, JSON.stringify(river));
+
 /* ---- save / restore survives the new camera semantics ---- */
 const save = await page.evaluate(() => {
   const S = ID3.sim;
