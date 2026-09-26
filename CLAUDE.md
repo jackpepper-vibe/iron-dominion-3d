@@ -61,7 +61,7 @@ obvious from a screenshot.
 the viewport. Here they are the point on the ground the camera is looking *at*.
 Anything doing `mouse.x + camX` is a bug left over from the 2D version.
 
-**The rake is fixed at 52 degrees and does not rotate.** Wheel dollies along it.
+**The rake is fixed at 40 degrees (was 52 until 2026-09-26; the user wanted a more angled view) and does not rotate.** Wheel dollies along it.
 This is a deliberate constraint, not an unfinished feature: fixed yaw is what
 lets marquee select, the placement ghost, edge scroll and the radar stay simple
 and predictable. `R3D` is written so unlocking yaw later is contained, but
