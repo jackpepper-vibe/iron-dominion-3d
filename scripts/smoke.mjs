@@ -328,6 +328,25 @@ const mcv = await page.evaluate(() => {
 check('an MCV deploys into a Construction Yard and refuses occupied ground',
   mcv.found && mcv.yards === 1 && mcv.gone && mcv.refused, JSON.stringify(mcv));
 
+/* ---- superweapon: charges, launches, warns, then devastates the target ---- */
+const sw = await page.evaluate(() => {
+  const S = ID3.sim;
+  const up = ID3.build(0, 'uplink', 6, S.MAPH - 22);
+  for (let i = 0; i < 4; i++) ID3.build(0, 'power', 2 + i * 2, S.MAPH - 26);   // it needs power to charge
+  const notYet = !S.readyUplink(0);
+  up.charge = S.swChargeTime(0) - 0.1;
+  ID3.step(6, 1 / 30);
+  const ready = !!S.readyUplink(0);
+  const target = ID3.build(1, 'factory', 40, 40), tx = target.x, ty = target.y;
+  const launched = S.launchStrike(0, tx, ty);
+  const pending = S.strikes.length === 1 && target.hp === target.maxhp;
+  ID3.step(110, 1 / 30);
+  return { notYet, ready, launched, pending, destroyed: !S.buildings.includes(target), recharging: (up.charge || 0) < 5 };
+});
+check('the uplink charges, and a launched strike warns before it hits',
+  sw.notYet && sw.ready && sw.launched && sw.pending, JSON.stringify(sw));
+check('the strike destroys a war factory and the uplink starts recharging', sw.destroyed && sw.recharging);
+
 /* ---- save / restore survives the new camera semantics ---- */
 const save = await page.evaluate(() => {
   const S = ID3.sim;

@@ -191,6 +191,16 @@
     min-width:40px;text-align:center}
   #powerval.low{color:var(--red)}
   @keyframes blink{50%{opacity:.35}}
+  /* superweapon: only shown while the player owns an uplink */
+  #swpanel{display:none;padding:7px 10px 8px;gap:5px;flex-direction:column}
+  #swname{font-size:9px;letter-spacing:2px;color:#9fdcff}
+  #swbar{height:6px;background:#0d0f12;border:1px solid #3a3f46;overflow:hidden}
+  #swfill{height:100%;width:0;background:linear-gradient(90deg,#2a6f9a,#9fdcff)}
+  #swbtn{font-family:inherit;font-size:10px;letter-spacing:2px;padding:6px 0;background:#15181c;
+    color:#6d737b;border:1px solid #3a3f46;cursor:default}
+  #swbtn.ready{color:#0b1a24;background:#9fdcff;border-color:#d8f2ff;cursor:pointer;
+    animation:blink 1.2s steps(2) infinite}
+  #swbtn.aim{color:#fff;background:#b3322e;border-color:#ff8a80;animation:none}
   #tabs{display:flex}
   .tab{flex:1;text-align:center;padding:8px 0;font-size:11px;letter-spacing:1px;cursor:pointer;
     background:var(--panel2);border-right:1px solid var(--bevel-d);color:#8a9098}
@@ -305,6 +315,7 @@
         &bull; Selected building: <b>R</b> repair &nbsp;&bull; <b>X</b> sell &nbsp;&bull; right-click ground sets a factory's rally point<br>
         &bull; Engineers: right-click a structure to capture (at half strength or less), sabotage, or restore your own<br>
         &bull; MCV: <b>V</b> deploys a Construction Yard on the open ground under it<br>
+        &bull; Strike Uplink: when charged, <b>LAUNCH</b> in the sidebar, then click a target<br>
         &bull; Keep power (green bar) above demand or production slows and radar fails.
       </div>
       </div>
@@ -322,6 +333,11 @@
       <div id="powerwrap"><div id="powerbar"></div></div>
       <div id="powerval" title="Power supply / demand">100/0</div>
       <div id="objline"></div>
+    </div>
+    <div class="sb-section" id="swpanel">
+      <div id="swname">ORBITAL LANCE</div>
+      <div id="swbar"><div id="swfill"></div></div>
+      <button id="swbtn" type="button">CHARGING</button>
     </div>
     <div class="sb-section" id="tabs">
       <div class="tab active" data-tab="structure">STRUCTURES</div>
@@ -392,6 +408,8 @@ const BDEFS={
             desc:'Airfield pad. Authorizes the Gunship in the War Factory queue.'},
   techlab: {name:'Tech Center',       w:2,h:2, hp:800,  cost:1500, power:-40, build:16, sight:5, prereq:'factory', tech:7,
             desc:'Research nexus. Authorizes advanced weapons such as the Thor Artillery.'},
+  uplink:  {name:'Strike Uplink',     w:2,h:2, hp:1000, cost:2500, power:-60, build:30, sight:5, prereq:'techlab', tech:8,
+            desc:'Charges your side\'s superweapon. Charging stops while power is low.'},
   /* passive defences: unpowered, unarmed obstacles. They block movement and soak
      fire, buying time and shaping the approach, but cannot fight back. */
   sandbag: {name:'Sandbag Wall',      w:1,h:1, hp:240,  cost:75,   power:0,   build:3,  sight:2, prereq:'barracks', tech:3, barrier:true,
@@ -419,7 +437,7 @@ const UDEFS={
              desc:'Deploys into a Construction Yard wherever there is open ground.'},
 };
 const SIDEBAR_ITEMS={
-  structure:['power','refinery','barracks','factory','guardtower','turret','bastion','helipad','sandbag','trench','hedgehog','techlab'],
+  structure:['power','refinery','barracks','factory','guardtower','turret','bastion','helipad','sandbag','trench','hedgehog','techlab','uplink'],
   infantry:['trooper','rocketeer','grenadier','engineer'],
   vehicle:['buggy','tank','heavy','gunship','artillery','harvester','mcv'],
 };
@@ -445,9 +463,9 @@ let mission=0;               // the mission being briefed or fought; unlocks liv
 let paused=false;            // simulation frozen; rendering and camera continue
 let difficulty=1;            // 0 easy, 1 normal, 2 hard (persists across missions this session)
 const DIFFS=[
-  {name:'EASY',   income:0.65, waveInt:1.35, waveSize:-1, waveCap:0.7, armyCap:0.7, heavyAt:1.6, eCred:0.75, pCred:1.25},
-  {name:'NORMAL', income:1.0,  waveInt:1.0,  waveSize:0,  waveCap:1.0, armyCap:1.0, heavyAt:1.0, eCred:1.0,  pCred:1.0 },
-  {name:'HARD',   income:1.4,  waveInt:0.75, waveSize:1,  waveCap:1.3, armyCap:1.3, heavyAt:0.6, eCred:1.35, pCred:1.0 },
+  {name:'EASY',   income:0.65, waveInt:1.35, waveSize:-1, waveCap:0.7, armyCap:0.7, heavyAt:1.6, eCred:0.75, pCred:1.25, swCharge:1.5},
+  {name:'NORMAL', income:1.0,  waveInt:1.0,  waveSize:0,  waveCap:1.0, armyCap:1.0, heavyAt:1.0, eCred:1.0,  pCred:1.0,  swCharge:1.0},
+  {name:'HARD',   income:1.4,  waveInt:0.75, waveSize:1,  waveCap:1.3, armyCap:1.3, heavyAt:0.6, eCred:1.35, pCred:1.0,  swCharge:0.8},
 ];
 let surviveT=0;              // countdown for survival objectives
 let tick=0, lastAttackWarn=-999;
@@ -1283,6 +1301,22 @@ function makeBuildingSprite(type,trim,dark){
   c.strokeStyle='rgba(0,0,0,0.45)';c.lineWidth=1;c.stroke();
   c.fillStyle='rgba(255,255,255,0.06)';c.fillRect(x-4,y-3,W+8,2);
   const wallY=y+H-WALL_H;
+  if(type==='uplink'){
+    /* dish on a lattice mast over a control block; blue charge tubes */
+    const cx=x+W*0.64, cy=y+H*0.38;
+    c.fillStyle='rgba(0,0,0,0.35)';c.beginPath();c.ellipse(cx+6,cy+8,19,12,0.4,0,6.28);c.fill();
+    const g=c.createLinearGradient(0,y+H*0.45,0,y+H);
+    g.addColorStop(0,'#9a9784');g.addColorStop(1,'#5d5a4c');
+    rr(c,x+4,y+H*0.48,W*0.62,H*0.44,3);c.fillStyle=g;c.fill();c.strokeStyle='#1e2024';c.stroke();
+    c.fillStyle=trim;c.fillRect(x+6,y+H*0.52,W*0.56,2.5);
+    c.fillStyle='#3a3f46';c.fillRect(cx-1.5,cy,3,H*0.42);
+    const dg=c.createRadialGradient(cx-5,cy-5,2,cx,cy,15);
+    dg.addColorStop(0,'#e8ecf0');dg.addColorStop(0.6,'#9aa2ac');dg.addColorStop(1,'#4b5159');
+    c.fillStyle=dg;c.beginPath();c.ellipse(cx,cy,15,11,-0.3,0,6.28);c.fill();c.strokeStyle='#1a1d22';c.stroke();
+    c.fillStyle='#9fdcff';c.beginPath();c.arc(cx,cy,2.4,0,6.28);c.fill();
+    for(const dy of [0.2,0.72]){c.fillStyle='#6fd0ff';c.fillRect(x+W*0.1,y+H*dy,4,H*0.2);}
+    return can;
+  }
   if(type==='conyard'){
     const base='#4d5158';
     roofPlane(c,x,y,W,H-WALL_H,base,4);
@@ -2062,6 +2096,78 @@ function updateEngineer(u,dt,d){
     /* the path ends beside the footprint; step the last few units to the wall */
     const a=Math.atan2(t.y-u.y,t.x-u.x); u.x+=Math.cos(a)*d.speed*dt; u.y+=Math.sin(a)*d.speed*dt; u.path=null;
   }
+}
+
+/* ================= SUPERWEAPONS =================
+   Each side's Strike Uplink charges its superweapon while the side has
+   power. The Dominion's Orbital Lance is an ion beam from orbit; the
+   Scourge's Hellfire Missile is a warhead dropped from the edge of space.
+   Mechanically they are the same strike: a short warning with a beacon on
+   the ground, then devastation across a few tiles that spares nobody —
+   your own units included, as in Command & Conquer. */
+const SW_CHARGE=210;                        // seconds at full power
+const SW_RADIUS=3.3*TILE, SW_DMG=1100;
+const SW_NAME=['ORBITAL LANCE','HELLFIRE MISSILE'];
+const SW_DELAY=[2.6,5.0];                   // the enemy's warning is longer: the player must be able to react
+let strikes=[];                             // {owner,x,y,t,delay,hit}
+let targeting=null;                         // 'strike' while the player is aiming
+function swChargeTime(owner){ return SW_CHARGE*(owner===ENEMY?DIFFS[difficulty].swCharge:1); }
+function uplinksOf(owner){ return buildings.filter(b=>b.owner===owner&&b.type==='uplink'&&b.built>=1); }
+function readyUplink(owner){ return uplinksOf(owner).find(b=>(b.charge||0)>=swChargeTime(owner))||null; }
+function updateSuperweapons(dt){
+  for(const owner of [PLAYER,ENEMY]){
+    const on=powerOf(owner).ok, full=swChargeTime(owner);
+    for(const b of uplinksOf(owner)){
+      const was=b.charge||0;
+      if(on)b.charge=Math.min(full,was+dt);
+      if(was<full&&b.charge>=full){
+        if(owner===PLAYER){eva(SW_NAME[PLAYER].toLowerCase().replace(/\b\w/g,c=>c.toUpperCase())+' ready');beep(880,0.2,'square',0.08);}
+        else eva('Warning: enemy superweapon charged');
+      }
+    }
+  }
+  for(let i=strikes.length-1;i>=0;i--){
+    const st=strikes[i]; st.t+=dt;
+    if(!st.hit&&st.t>=st.delay){st.hit=true;detonateStrike(st);}
+    if(st.t>=st.delay+1.6)strikes.splice(i,1);
+  }
+}
+function launchStrike(owner,x,y){
+  const b=readyUplink(owner);
+  if(!b)return false;
+  b.charge=0;
+  strikes.push({owner,x,y,t:0,delay:SW_DELAY[owner],hit:false});
+  if(owner===PLAYER){eva(SW_NAME[PLAYER]+' authorized');beep(300,0.3,'sawtooth',0.1);}
+  else{eva('Warning: '+SW_NAME[ENEMY].toLowerCase()+' inbound');beep(140,0.5,'sawtooth',0.14);}
+  return true;
+}
+function detonateStrike(st){
+  const hit=e=>{
+    const d=e.cls==='b'?distTo({x:st.x,y:st.y},e):Math.hypot(e.x-st.x,e.y-st.y);
+    if(d>=SW_RADIUS)return;
+    const k=Math.pow(1-d/SW_RADIUS,0.55);
+    dealDamage(e,SW_DMG*k*(e.cls==='u'?0.8:1),null);
+  };
+  for(const u of units.slice())if(u.hp>0)hit(u);
+  for(const b of buildings.slice())if(b.hp>0)hit(b);
+  boom(st.x,st.y,64);
+  for(let i=0;i<5;i++){const a=i/5*6.283; boom(st.x+Math.cos(a)*SW_RADIUS*0.55,st.y+Math.sin(a)*SW_RADIUS*0.55,22);}
+  scorch(st.x,st.y,SW_RADIUS*1.1,0.8);
+  for(let dy=-3;dy<=3;dy++)for(let dx=-3;dx<=3;dx++)burnTrees(st.x+dx*TILE,st.y+dy*TILE);
+  shake=Math.min(18,shake+16);
+}
+/* The enemy aims where it hurts most: the player structure with the most
+   other player structures and units inside the blast. */
+function aiStrikeTarget(){
+  const mine=buildings.filter(b=>b.owner===PLAYER);
+  let best=null,score=-1;
+  for(const c of mine){
+    let n=0;
+    for(const b of mine)if(Math.hypot(b.x-c.x,b.y-c.y)<SW_RADIUS)n+=valueOf(b.type)/500;
+    for(const u of units)if(u.owner===PLAYER&&Math.hypot(u.x-c.x,u.y-c.y)<SW_RADIUS)n+=UDEFS[u.type].cost/800;
+    if(n>score){score=n;best=c;}
+  }
+  return best;
 }
 
 /* ================= MOBILE CONSTRUCTION VEHICLE =================
@@ -2885,6 +2991,7 @@ function updateAI(dt){
     pool.sort((a,b)=>Math.hypot(a.x-e.x,a.y-e.y)-Math.hypot(b.x-e.x,b.y-e.y));
     orderCapture(e,pool[0]);
   }
+  if(tick%30===15&&readyUplink(ENEMY)){ const t=aiStrikeTarget(); if(t)launchStrike(ENEMY,t.x,t.y); }
   // upkeep: the enemy repairs damaged structures while it can afford to
   if(tick%90===45)for(const b of buildings)
     if(b.owner===ENEMY&&b.hp<b.maxhp*0.7&&credits[ENEMY]>400)setRepair(b,true);
@@ -2956,7 +3063,7 @@ window.addEventListener('keydown',e=>{
   const k=e.key.toLowerCase();
   if(k==='p'||(e.key===' '&&!e.repeat)){togglePause();e.preventDefault();return;}
   if(paused&&e.key!=='Escape')return;    // no orders or hotkeys while frozen
-  if(e.key==='Escape'){selection=[];selectedBuilding=null;placing=null;}
+  if(e.key==='Escape'){selection=[];selectedBuilding=null;placing=null;targeting=null;}
   if(e.key.toLowerCase()==='c')scanOn=!scanOn;
   /* building verbs on the selected structure */
   const sb=selectedBuilding&&selectedBuilding.owner===PLAYER?selectedBuilding:null;
@@ -2988,6 +3095,7 @@ function groundUnder(mx,my){
    to attack what is under the cursor, or move there in formation. */
 function rightClickOrder(mx,my){
   if(paused)return;   // no orders while frozen
+  if(targeting){targeting=null;eva('Strike aborted');return;}
   if(placing){placing=null;return;}
   if(!selection.length){
     /* a production facility selected on its own: right-click sets its rally point */
@@ -3032,6 +3140,11 @@ function rightClickOrder(mx,my){
   }
 }
 view.addEventListener('mousedown',e=>{
+  if(targeting==='strike'&&e.button===0&&!paused){
+    const r=view.getBoundingClientRect(), g=R3D.screenToGround(e.clientX-r.left,e.clientY-r.top);
+    if(g&&launchStrike(PLAYER,g.x,g.y))targeting=null;
+    return;
+  }
   if(e.button===1||e.button===2){
     /* Middle pans at once; right waits to see whether it is a click or a drag.
        Both work while paused — reading the battlefield is not an order. */
@@ -3436,7 +3549,7 @@ const FACTION_PLATES=[
    surface shader needs, as attributes. */
 function isAnimated(root){
   const s=new Set();
-  for(const k of ['tur','rotor','tailrotor','wheel','ore'])if(root.userData[k])s.add(root.userData[k]);
+  for(const k of ['tur','rotor','tailrotor','wheel','ore','charge'])if(root.userData[k])s.add(root.userData[k]);
   for(const e of root.userData.spin||[])s.add(e.o);
   for(const e of root.userData.blink||[])s.add(e.o);
   return s;
@@ -3909,6 +4022,38 @@ const BMODELS={
     for(const sx of [-1,1]) ANIM.blink(g,lamp(g,1.8,trim,sx*21,34,20),sx>0?0.5:0);
     windows(g,4,-18,18,14,23.2);
     acUnit(g,-15,26,-15,0.8);
+  },
+  uplink(g,trim,dark){
+    /* A lattice mast carrying a great dish pointed at the sky, flanked by
+       capacitor stacks whose glow column fills as the strike charges. */
+    blk(g,60,5,60,CONC,0,0,0);
+    blk(g,34,12,28,PLATE,-4,5,6,true);                              // control block
+    blk(g,34,3,28,PLATE_L,-4,17,6,true);
+    windows(g,4,-17,9,12,20.2);
+    blk(g,14,10,2,SHUTTER,-4,5,20.6);
+    for(const sx of [-1,1])for(const sz of [-1,1]) cyl(g,1.1,34,IRON,15+sx*5,5,-14+sz*5);   // mast legs
+    for(let i=0;i<4;i++) blk(g,11,1,11,IRON,15,10+i*8,-14,true);    // lattice rings
+    cyl(g,4,5,PLATE_D,15,39,-14,true);
+    const dish=new THREE.Group(); dish.position.set(15,46,-14); g.add(dish);
+    /* tilted toward the sky like a real dish, so it reads as a bowl from the RTS camera */
+    const tilt=new THREE.Group(); tilt.rotation.z=0.62; dish.add(tilt);
+    const d=put(tilt,G_CONE,34,11,34,PLATE_L,0,0,0,true); d.rotation.set(Math.PI,0,0); d.position.set(0,5,0);
+    cyl(tilt,0.8,12,IRON,0,0,0); lamp(tilt,1.8,'#9fdcff',0,13,0);
+    for(const a of [0,2.1,4.2])cyl(tilt,0.35,10,IRON,Math.cos(a)*9,4,Math.sin(a)*9);   // feed-horn struts
+    ANIM.spin(g,dish,0.12);
+    /* the charge columns: glass tubes that fill with light */
+    /* open cages, so the light column inside is what you see */
+    for(const sz of [-1,1]){
+      cyl(g,4.2,1.6,PLATE_D,-18,5,sz*18,true);
+      cyl(g,4.2,1.4,PLATE_L,-18,27,sz*18);
+      for(const a of [0.4,2.5,4.6])cyl(g,0.5,21,IRON,-18+Math.cos(a)*3.8,5,sz*18+Math.sin(a)*3.8);
+      cyl(g,2.6,20,'#1b2a33',-18,6.5,sz*18);          // dark core, lit from below as it charges
+    }
+    const col=new THREE.Group(); col.position.set(-18,6,0); g.add(col);
+    for(const sz of [-1,1]) put(col,G_CYL,6,20,6,'#6fd0ff',0,0,sz*18,false,true);
+    g.userData.charge=col;
+    stripe(g,34,3,trim,-4,20.4,6);
+    ANIM.blink(g,antenna(g,-18,20,6,12),0.3);
   },
   sandbag(g,trim,dark){
     /* three courses, each bag a squashed hexagonal drum, offset like real
@@ -4719,7 +4864,7 @@ float groundOre;
     src.traverse(o=>a.push(o)); g.traverse(o=>b.push(o));
     for(let i=0;i<a.length;i++)map.set(a[i],b[i]);
     g.userData={};
-    for(const key of ['tur','rotor','tailrotor','wheel','ore'])
+    for(const key of ['tur','rotor','tailrotor','wheel','ore','charge'])
       if(src.userData[key])g.userData[key]=map.get(src.userData[key]);
     if(src.userData.muzzle)g.userData.muzzle=src.userData.muzzle.clone();
     if(src.userData.legs)g.userData.legs=true;
@@ -4766,6 +4911,11 @@ float groundOre;
   function animateStructure(v,b,dt,powered){
     const on=b.built>=1&&powered[b.owner], t=GROUND_TIME.value+v.userData.phase;
     if(v.userData.spin&&on)for(const e of v.userData.spin)e.o.rotation.y+=e.rate*dt;
+    if(v.userData.charge){
+      const f=Math.min(1,(b.charge||0)/swChargeTime(b.owner));
+      v.userData.charge.scale.y=Math.max(0.02,f); v.userData.charge.position.y=6-10*(1-f);
+      v.userData.charge.visible=f>0.01;
+    }
     if(v.userData.blink)for(const e of v.userData.blink)e.o.visible=on&&((t*0.9+e.phase)%1)<0.55;
     if(!(dt>0))return;
     v.userData.puffT=(v.userData.puffT||0)-dt;
@@ -4908,6 +5058,42 @@ float groundOre;
       g.m.scale.set(k,1,k);
       g.m.material.opacity=g.kind==='ring'?(1-f)*0.8:(1-f)*(1-f)*0.9;
       g.m.material.color.setRGB(1,g.kind==='ring'?0.9:0.62,g.kind==='ring'?0.75:0.3);
+    }
+  }
+
+  /* ---- superweapon strikes ----
+     The Orbital Lance: a column of light that thickens and brightens over
+     the warning, then a blinding pulse at impact. The Hellfire Missile: a
+     warhead falling out of the sky on a smoke trail, accelerating as it
+     comes. Either way the impact itself is the sim's blast and the burst
+     director turns it into fire. */
+  const beamPool=[], beamLive=[];
+  const G_BEAM=new THREE.CylinderGeometry(1,1,1,20,1,true);
+  function takeBeam(){
+    let m=beamPool.pop();
+    if(!m){ m=new THREE.Mesh(G_BEAM,new THREE.MeshBasicMaterial({transparent:true,depthWrite:false,
+      blending:THREE.AdditiveBlending,side:THREE.DoubleSide})); m.frustumCulled=false; }
+    fx_group.add(m); beamLive.push(m); return m;
+  }
+  function drawStrike(st){
+    const gy=groundH(st.x,st.y), before=st.t<st.delay;
+    if(st.owner===PLAYER){
+      const f=before?st.t/st.delay:1-(st.t-st.delay)/1.6;
+      if(f<=0)return;
+      const H=1600;
+      for(const [w,a,c] of [[before?2+f*6:40*f,before?0.35+f*0.4:f,[0.62,0.86,1]],[before?0.8+f*2:14*f,1,[1,1,1]]]){
+        const m=takeBeam(); m.scale.set(w,H,w); m.position.set(st.x,gy+H/2,st.y);
+        m.material.opacity=a; m.material.color.setRGB(...c);
+      }
+      if(!before&&st.t-st.delay<0.25)fx({kind:'flash',x:st.x,y:gy+30,z:st.y,life:0.25,size:120});
+    } else if(before){
+      /* the warhead: falls the last stretch in the final two seconds */
+      const fall=Math.max(0,(st.t-(st.delay-2))/2), y=gy+2600*(1-fall*fall);
+      if(fall>0){
+        const s=takeSprite(TEX_FIRE,THREE.AdditiveBlending); liveSprites.push(s);
+        s.position.set(st.x,y,st.y); s.scale.set(26,26,1); s.material.opacity=1; s.material.color.setRGB(1,0.7,0.4);
+        fx({kind:'plume',x:st.x+(Math.random()-0.5)*6,y:y+14,z:st.y+(Math.random()-0.5)*6,vy:6,life:1.8,size:9});
+      }
     }
   }
 
@@ -5088,6 +5274,7 @@ float groundOre;
   function freeLine(l){ fx_group.remove(l); linePool.push(l); }
   const liveSprites=[], liveLines=[];
   function recycle(){
+    while(beamLive.length){ const m=beamLive.pop(); fx_group.remove(m); beamPool.push(m); }
     while(liveSprites.length)freeSprite(liveSprites.pop());
     while(liveLines.length)freeLine(liveLines.pop());
   }
@@ -5121,6 +5308,7 @@ float groundOre;
       seenBoom.add(e);
       burst(e.x,e.y,e.size,Math.max(0,-e.life));
     }
+    for(const st of strikes)drawStrike(st);
     for(const p of projectiles){                   // rockets leave a smoke trail
       if(p.kind!=='rocket'||Math.random()<0.4)continue;
       const f=Math.min(1,p.t/p.dur), x=p.x+(p.tx-p.x)*f, z=p.y+(p.ty-p.y)*f;
@@ -5403,6 +5591,16 @@ function render(dt){
     drawHealth(b.x-r,b.y-r-8,r*2,u.hp/u.maxhp);
     if(u.rank)drawRank(b.x+r+3,b.y-r-9,u.rank);
   }
+  if(targeting==='strike'){
+    const g=R3D.screenToGround(mouse.x,mouse.y);
+    if(g)drawGroundCircle(g.x,g.y,SW_RADIUS,'rgba(159,220,255,.9)','rgba(159,220,255,.10)');
+  }
+  for(const st of strikes){
+    if(st.hit)continue;
+    const pulse=0.5+0.5*Math.sin(performance.now()/90);
+    drawGroundCircle(st.x,st.y,SW_RADIUS*(1-0.15*pulse),st.owner===PLAYER?'rgba(159,220,255,.95)':'rgba(255,90,70,.95)',
+      st.owner===PLAYER?'rgba(159,220,255,.12)':'rgba(255,60,40,.16)');
+  }
   for(const u of selection){
     if(u.type!=='mcv'||u.hp<=0)continue;
     const q=footprintQuad(mcvSite(u)), ok=canDeploy(u);
@@ -5474,6 +5672,24 @@ function drawBuildingBrackets(b){
   const cx=(q[0].x+q[2].x)/2, top=Math.min(q[0].y,q[1].y,q[2].y,q[3].y);
   const wid=Math.max(30,Math.abs(q[1].x-q[0].x));
   drawHealth(cx-wid/2,top-11,wid,b.hp/b.maxhp);
+}
+/* A circle laid on the ground: sampled around its rim and projected, so it
+   hugs hills instead of floating as a flat screen ellipse. */
+function drawGroundCircle(x,y,r,stroke,fill){
+  const pts=[];
+  for(let i=0;i<40;i++){
+    const a=i/40*6.283, px=x+Math.cos(a)*r, py=y+Math.sin(a)*r;
+    const p=R3D.project(px,R3D.groundH(px,py)+2,py);
+    if(p.z>1)return;
+    pts.push(p);
+  }
+  ctx.save(); ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+  for(const p of pts)ctx.lineTo(p.x,p.y);
+  ctx.closePath(); ctx.fillStyle=fill; ctx.fill();
+  ctx.setLineDash([8,5]); ctx.strokeStyle=stroke; ctx.lineWidth=2; ctx.stroke();
+  const c=R3D.project(x,R3D.groundH(x,y)+2,y);
+  ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(c.x-9,c.y); ctx.lineTo(c.x+9,c.y); ctx.moveTo(c.x,c.y-9); ctx.lineTo(c.x,c.y+9); ctx.stroke();
+  ctx.restore();
 }
 /* Rank chevrons: one gold for a veteran, two for an elite. */
 function drawRank(x,y,rank){
@@ -5597,7 +5813,26 @@ function renderRadar(){
   rctx.fillRect(0,(tick*2)%188,188,3);
 }
 /* ================= HUD ================= */
+function updateSuperweaponPanel(){
+  const ups=uplinksOf(PLAYER), panel=document.getElementById('swpanel');
+  panel.style.display=ups.length?'flex':'none';
+  if(!ups.length){ if(targeting)targeting=null; return; }
+  const full=swChargeTime(PLAYER), f=Math.max(...ups.map(b=>(b.charge||0)/full));
+  document.getElementById('swfill').style.width=(f*100).toFixed(1)+'%';
+  const btn=document.getElementById('swbtn');
+  const ready=f>=1;
+  btn.className=targeting?'aim':ready?'ready':'';
+  btn.textContent=targeting?'SELECT TARGET \u00b7 RIGHT-CLICK CANCELS':ready?'LAUNCH':
+    (powerOf(PLAYER).ok?'CHARGING '+Math.floor(f*100)+'%':'NO POWER \u00b7 '+Math.floor(f*100)+'%');
+}
+document.getElementById('swbtn').addEventListener('click',()=>{
+  if(!started||gameOver||paused)return;
+  if(targeting){targeting=null;}
+  else if(readyUplink(PLAYER)){targeting='strike';selection=[];eva('Select target');beep(600,0.08,'square',0.07);}
+  updateSuperweaponPanel();
+});
 function updateHUD(){
+  updateSuperweaponPanel();
   document.getElementById('credits').textContent=Math.floor(credits[PLAYER]);
   const pw=powerOf(PLAYER);
   const bar=document.getElementById('powerbar');
@@ -5804,7 +6039,8 @@ const MISSIONS=[
   player:pb([],[['heavy',17,MAPH-11],['tank',18,MAPH-9]],4000),
   enemy:{credits:10000, buildings:[['conyard',MAPW-12,9],
     ['turret',MAPW-8,6],['turret',MAPW-8,12],['turret',MAPW-16,6],['turret',MAPW-16,12],['turret',MAPW-12,14],['turret',MAPW-12,4],['bastion',MAPW-19,9],['bastion',MAPW-6,9],
-    ['power',MAPW-20,5],['power',MAPW-20,12],['power',MAPW-16,16],['refinery',MAPW-9,16],['barracks',MAPW-21,8],['factory',MAPW-16,19],['techlab',MAPW-22,15],['helipad',MAPW-11,17],['guardtower',MAPW-9,12],['hedgehog',MAPW-14,11],['hedgehog',MAPW-13,11]],
+    ['power',MAPW-20,5],['power',MAPW-20,12],['power',MAPW-16,16],['refinery',MAPW-9,16],['barracks',MAPW-21,8],['factory',MAPW-16,19],['techlab',MAPW-22,15],['helipad',MAPW-11,17],['guardtower',MAPW-9,12],['hedgehog',MAPW-14,11],['hedgehog',MAPW-13,11],
+    ['power',MAPW-27,11],['uplink',MAPW-25,11]],
     units:[['harvester',MAPW-11,18],['tank',MAPW-15,14],['tank',MAPW-13,16],['heavy',MAPW-14,13],['artillery',MAPW-14,17],['trooper',MAPW-17,10],['trooper',MAPW-7,11],['gunship',MAPW-13,12],['gunship',MAPW-15,11]]},
   ai:{income:18,buildInt:6,armyCap:24,waveInt:55,waveFirst:60,waveSize:5,waveCap:14,heavyAt:900} },
 
@@ -5813,7 +6049,8 @@ const MISSIONS=[
   brief:"<b>COMMANDER \u2014</b> This is the last dawn of the war. What remains of the Scourge has gathered at the place of their founding: a <i>command spire</i> in the north-east, a war-camp squatting on the great ore basin, and gun batteries walling the western approach to your own gates. They are rich beyond reason, their Mammuts roll from the first minute, and they will neither retreat nor surrender. Every soldier of the Dominion stands behind you. Break all three fronts, burn the spire, and bring the dawn.",
   player:pb([['factory',17,MAPH-13]],[['heavy',19,MAPH-10],['tank',20,MAPH-8]],6000),
   enemy:{credits:14000, buildings:[
-    ['conyard',MAPW-13,8],['power',MAPW-16,9],['power',MAPW-16,12],['power',MAPW-20,8],['refinery',MAPW-10,13],['barracks',MAPW-17,5],['factory',MAPW-13,4],['techlab',MAPW-24,10],['turret',MAPW-15,15],['turret',MAPW-19,11],['turret',MAPW-11,17],['turret',MAPW-9,11],['bastion',MAPW-18,7],['helipad',MAPW-21,13],['guardtower',MAPW-13,16],['hedgehog',MAPW-14,17],['hedgehog',MAPW-12,17],
+    ['conyard',MAPW-13,8],['power',MAPW-16,9],['power',MAPW-16,12],['power',MAPW-20,8],['refinery',MAPW-10,13],['barracks',MAPW-17,5],['factory',MAPW-13,4],['techlab',MAPW-24,10],
+    ['uplink',MAPW-27,6],['power',MAPW-29,9],['turret',MAPW-15,15],['turret',MAPW-19,11],['turret',MAPW-11,17],['turret',MAPW-9,11],['bastion',MAPW-18,7],['helipad',MAPW-21,13],['guardtower',MAPW-13,16],['hedgehog',MAPW-14,17],['hedgehog',MAPW-12,17],
     ['power',38,32],['barracks',40,33],['factory',34,33],['turret',37,36],['bastion',43,32],['turret',33,30],['helipad',35,35],['hedgehog',35,30],['hedgehog',36,30],
     ['power',25,MAPH-22],['turret',24,MAPH-20],['bastion',28,MAPH-24],['turret',22,MAPH-25],['guardtower',27,MAPH-22],['hedgehog',26,MAPH-20],['hedgehog',27,MAPH-20]],
     units:[['harvester',MAPW-12,16],['tank',MAPW-14,18],['heavy',MAPW-14,13],['artillery',MAPW-16,14],['trooper',MAPW-18,14],['gunship',MAPW-20,12],
@@ -5836,6 +6073,7 @@ function placeSide(owner,cfg){
 }
 function resetWorld(M){
   buildings=[];units=[];projectiles=[];particles=[];explosions=[];rollouts=[];soldIds=new Set();
+  strikes=[];targeting=null;
   selection=[];selectedBuilding=null;groups={};placing=null;nextId=1;
   queues={structure:[],infantry:[],vehicle:[]};
   gameOver=false;tick=0;shake=0;lowPower=false;lastAttackWarn=-999;
@@ -6086,13 +6324,14 @@ function serializeState(){
     },
     buildings:buildings.map(b=>({id:b.id,owner:b.owner,type:b.type,tx:b.tx,ty:b.ty,hp:b.hp,
       built:b.built,turAngle:b.turAngle,cool:b.cool,target:tid(b.target),door:b.door,doorT:b.doorT,unload:b.unload||0,
-      repairing:!!b.repairing,rally:b.rally||null})),
+      repairing:!!b.repairing,rally:b.rally||null,charge:b.charge||0})),
     units:units.map(u=>({id:u.id,owner:u.owner,type:u.type,x:u.x,y:u.y,hp:u.hp,angle:u.angle,
       turAngle:u.turAngle,order:u.order,target:tid(u.target),dest:u.dest,cool:u.cool,
       cargo:u.cargo,hstate:u.hstate,oreTile:u.oreTile,htimer:u.htimer,unloaded:u.unloaded,alt:u.alt,rotor:u.rotor,
       xp:u.xp||0,rank:u.rank||0})),
     queues:{structure:queues.structure.map(cloneLine),infantry:queues.infantry.map(cloneLine),vehicle:queues.vehicle.map(cloneLine)},
     ai:Object.assign({},ai),
+    strikes:strikes.map(st=>Object.assign({},st)),
     groups:Object.fromEntries(Object.entries(groups).map(([k,a])=>[k,a.filter(u=>u.hp>0).map(u=>u.id)])),
   };
 }
@@ -6104,6 +6343,7 @@ function restoreState(S){
   explored=bytesFromB64(S.grids.explored);
   occ=new Int32Array(MAPW*MAPH); visible=new Uint8Array(MAPW*MAPH);
   buildings=[];units=[];projectiles=[];particles=[];explosions=[];rollouts=[];soldIds=new Set();
+  strikes=(S.strikes||[]).map(st=>Object.assign({},st)); targeting=null;
   selection=[];selectedBuilding=null;placing=null;shake=0;
   const byId=new Map();
   for(const s of S.buildings){
@@ -6112,7 +6352,7 @@ function restoreState(S){
       hp:s.hp,maxhp:d.hp,x:(s.tx+d.w/2)*TILE,y:(s.ty+d.h/2)*TILE,
       cool:s.cool||0,turAngle:s.turAngle||0,target:null,flash:0,built:s.built??1,
       recoil:0,muzzle:0,door:s.door||0,doorT:s.doorT||0,unload:s.unload||0,_t:s.target,
-      repairing:!!s.repairing,rally:s.rally||null};
+      repairing:!!s.repairing,rally:s.rally||null,charge:s.charge||0};
     for(let dy=0;dy<d.h;dy++)for(let dx=0;dx<d.w;dx++)occ[idx(s.tx+dx,s.ty+dy)]=b.id;
     buildings.push(b); byId.set(b.id,b);
   }
@@ -6354,7 +6594,7 @@ window.ID3={
     return !!e;
   },
   step(n,dt){ for(let i=0;i<n;i++){ tick++; for(const u of units)updateUnit(u,dt||STEP);
-    for(const b of buildings)updateBuilding(b,dt||STEP); updateProjectiles(dt||STEP); updateRepairs(dt||STEP); updateVeterans(dt||STEP); } updateFog(); },
+    for(const b of buildings)updateBuilding(b,dt||STEP); updateProjectiles(dt||STEP); updateRepairs(dt||STEP); updateVeterans(dt||STEP); updateSuperweapons(dt||STEP); } updateFog(); },
   spawn(owner,type,tx,ty){ return addUnit(owner,type,(tx+0.5)*TILE,(ty+0.5)*TILE); },
   build(owner,type,tx,ty){ const b=addBuilding(owner,type,tx,ty); b.built=1; return b; },
   theme(i){ return R3D.setTheme(i); },
@@ -6374,7 +6614,7 @@ window.ID3={
     canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
     Campaign, showBoard, showBriefing,
     setRepair, sellBuilding, setRally, spawnUnitAt, refreshActions, orderCapture, awardKill, dealDamage,
-    canDeploy, deployMCV,
+    canDeploy, deployMCV, launchStrike, readyUplink, swChargeTime, get strikes(){ return strikes; },
     get credits(){ return credits; }, get selectedBuilding(){ return selectedBuilding; },
     set selectedBuilding(v){ selectedBuilding=v; },
   },
@@ -6412,6 +6652,7 @@ function loop(ts){
       updateQueues(STEP);
       updateRepairs(STEP);
       updateVeterans(STEP);
+      updateSuperweapons(STEP);
       updateRollouts(STEP);
       updateAI(STEP);
       shake*=0.85;
