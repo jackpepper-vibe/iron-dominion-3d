@@ -146,6 +146,24 @@ missions only; `showBriefing()` refuses a locked index. Each mission's board
 card reads `name`, `blurb`, `code` (operation · phase) and `objType` from
 `MISSIONS`, so a new mission needs all four.
 
+## Gameplay systems (2026-09-26)
+
+- **Which battle is running:** `mission` is a campaign index or `'skirmish'`;
+  always read the configuration through `activeMission()` (never
+  `MISSIONS[mission]` outside the campaign screens) and the theatre through
+  `themeIndex()`. Both starts go through `beginBattle(cfg)`.
+- **One tick:** `simTick()` is the whole fixed-step world update. The game
+  loop runs it and so should any test that needs AI, queues or superweapons
+  (`ID3.step` only moves units, structures and shots).
+- **Verbs on the selection:** push to `ACTIONS` (`when`, `build`, `sig`); the
+  action bar rebuilds only when a `sig` changes.
+- **Terrain kinds** live in `TDEF`; water/bridge/ford are `isWet`. Rivers
+  lower the ground through `WF`; units stand via `R3D.standH` (bridge decks).
+- **Skirmish AI construction** (`updateAIConstruction`) only runs when the
+  mission has `aiBuilds`; campaign enemy bases stay as authored.
+- Sell/repair, rally, engineers (`orderCapture`), veterancy (`RANKS`), MCV
+  (`deployMCV`), superweapons (`launchStrike`, `strikes`) are all saved.
+
 ## What is still 2D on purpose
 
 - **Sidebar icons.** `makeBuildingSprite()` and the vehicle sprite painters are

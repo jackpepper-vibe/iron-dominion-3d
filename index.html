@@ -137,6 +137,12 @@
   .mc-no{font-size:22px;font-weight:bold;letter-spacing:1px;color:#5a616b}
   .mcard.frontier .mc-no{color:var(--gold)}
   .mcard.done .mc-no{color:var(--green);opacity:.8}
+  .mcard.skirmish{border-color:#2f5a6e}
+  .mcard.skirmish .mc-no{color:#9fdcff;font-size:18px}
+  .skrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0 4px}
+  .sklabel{font-size:9px;letter-spacing:2px;color:#6d737b;min-width:62px}
+  .skintro{margin:10px 0 4px;font-size:12px;line-height:1.6}
+  .skblurb{font-size:11px;color:#7d848d;margin:2px 0 4px 68px}
   .mc-body{display:flex;flex-direction:column;gap:3px;min-width:0}
   /* Badge rides the name row so the description gets the card's full width. */
   .mc-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
@@ -240,7 +246,11 @@
      greyscale, so the choice is legible without relying on hue. */
   .msbtn.cur,.msbtn.cur:hover{background:var(--gold);color:#14160f;border-color:#ffd77a;
     cursor:default;font-weight:bold;box-shadow:0 0 10px rgba(232,178,58,.45)}
-  #mctl{font-size:10px;line-height:1.7}
+  /* scoped under #intro so it outranks the shared .brief rule */
+  #intro #mctl{font-size:10.5px;line-height:1.45}
+  #mctl .keys{display:grid;grid-template-columns:max-content 1fr;gap:3px 12px;margin-top:8px}
+  #mctl dt{color:var(--amber);white-space:nowrap}
+  #mctl dd{color:#9aa0a8}
   #objline{margin-top:7px;font-size:9px;letter-spacing:1px;color:var(--gold);text-align:center;line-height:1.4;min-height:11px}
   #objline.urgent{color:var(--red)}
   #ovsub{color:#aeb4bc;font-size:12px;letter-spacing:3px;margin:4px 0 18px}
@@ -306,17 +316,21 @@
       <div class="bcols">
       <div class="brief" id="mbrief"></div>
       <div class="brief" id="mctl">
-        <b>CONTROLS</b><br>
-        &bull; Left-drag: select units &nbsp;&bull; Right-click: move / attack<br>
-        &bull; <b>Right-drag</b> (or middle-drag): pan map &nbsp;&bull; Wheel: zoom &nbsp;&bull; WASD / arrows: scroll &nbsp;&bull; Click radar to jump<br>
-        &bull; <b>P</b> or <b>Space</b>: pause / resume (auto-pauses if you switch away)<br>
-        &bull; <b>E</b> or the top-right button: toggle edge-of-screen scrolling (off by default)<br>
-        &bull; Ctrl+1-5: assign group &nbsp;&bull; 1-5: recall group &nbsp;&bull; Right-click icon: cancel &amp; refund<br>
-        &bull; Selected building: <b>R</b> repair &nbsp;&bull; <b>X</b> sell &nbsp;&bull; right-click ground sets a factory's rally point<br>
-        &bull; Engineers: right-click a structure to capture (at half strength or less), sabotage, or restore your own<br>
-        &bull; MCV: <b>V</b> deploys a Construction Yard on the open ground under it<br>
-        &bull; Strike Uplink: when charged, <b>LAUNCH</b> in the sidebar, then click a target<br>
-        &bull; Keep power (green bar) above demand or production slows and radar fails.
+        <b>CONTROLS</b>
+        <dl class="keys">
+          <dt>Left-drag</dt><dd>select units</dd>
+          <dt>Right-click</dt><dd>move / attack &middot; set a factory's rally</dd>
+          <dt>Right-drag</dt><dd>pan the map (or middle-drag)</dd>
+          <dt>Wheel &middot; WASD</dt><dd>zoom &middot; scroll</dd>
+          <dt>P / Space</dt><dd>pause</dd>
+          <dt>E</dt><dd>edge-of-screen scrolling</dd>
+          <dt>Ctrl+1-5 &middot; 1-5</dt><dd>assign &middot; recall a group</dd>
+          <dt>R &middot; X</dt><dd>repair &middot; sell a structure</dd>
+          <dt>V</dt><dd>deploy an MCV</dd>
+          <dt>Engineer</dt><dd>capture (&le;50%) &middot; sabotage &middot; restore</dd>
+          <dt>LAUNCH</dt><dd>superweapon, from the sidebar</dd>
+          <dt>Power</dt><dd>keep supply above demand</dd>
+        </dl>
       </div>
       </div>
       <div class="brow">
@@ -459,7 +473,13 @@ let placing=null;            // building type awaiting placement
 let queues={structure:[], infantry:[], vehicle:[]};   // each tab holds N concurrent production lines
 let gameOver=false, started=false;
 let lowPower=false;          // tracked for radar-offline + EVA transitions
-let mission=0;               // the mission being briefed or fought; unlocks live in Campaign
+let mission=0;               // campaign index being briefed or fought, or 'skirmish'; unlocks live in Campaign
+let skirmish=null;           // the generated configuration while mission==='skirmish'
+/* The configuration of the battle in progress, campaign or skirmish. Nothing
+   outside the campaign screens should index MISSIONS directly. */
+function activeMission(){ return mission==='skirmish'?skirmish:MISSIONS[mission]; }
+function isSkirmish(){ return mission==='skirmish'; }
+function themeIndex(){ return isSkirmish()?skirmish.theme:mission; }
 let paused=false;            // simulation frozen; rendering and camera continue
 let difficulty=1;            // 0 easy, 1 normal, 2 hard (persists across missions this session)
 const DIFFS=[
@@ -2786,8 +2806,9 @@ function unitOnRadar(u){
 /* ================= VICTORY ================= */
 function checkVictory(){
   if(gameOver||!started)return;
-  const M=MISSIONS[mission];
-  const pB=buildings.some(b=>b.owner===PLAYER);
+  const M=activeMission();
+  /* an MCV still in the field is a base that has not been founded yet */
+  const pB=buildings.some(b=>b.owner===PLAYER)||units.some(u=>u.owner===PLAYER&&u.type==='mcv');
   const eB=buildings.some(b=>b.owner===ENEMY);
   if(M.objType==='destroy_target'&&!buildings.some(b=>b.owner===ENEMY&&b.type==='conyard')){endGame(true);return;}
   if(!eB){endGame(true);return;}
@@ -2800,6 +2821,17 @@ function endGame(win){
   document.getElementById('battlectl').style.display='none';
   const ov=document.getElementById('overlay'), t=document.getElementById('ovtitle'),
         sub=document.getElementById('ovsub'), btn=document.getElementById('ovbtn');
+  if(isSkirmish()){
+    clearBattleSave();
+    t.textContent=win?'VICTORY':'DEFEAT'; t.className=win?'':'lose';
+    sub.textContent=win?'THE ENEMY COMMANDER HAS BEEN ELIMINATED.':'YOUR FORCES HAVE BEEN OVERRUN.';
+    btn.textContent='MISSION SELECT';
+    btn.onclick=()=>{ov.style.display='none';showBoard();};
+    ov.style.display='flex';
+    if(win){beep(523,0.15,'square',0.1);setTimeout(()=>beep(784,0.3,'square',0.1),160);}
+    else beep(120,0.8,'sawtooth',0.12);
+    return;
+  }
   const finale=win&&mission===MISSIONS.length-1;
   const opened=win&&Campaign.recordClear(mission,difficulty);
   // The continue-slot only ever holds a live battle: a decided one is cleared,
@@ -2823,7 +2855,7 @@ const iconEls={};
 function tabOf(type){ return BDEFS[type]?'structure':(UDEFS[type].kind==='inf'?'infantry':'vehicle'); }
 function techOf(type){return (BDEFS[type]||UDEFS[type]).tech||1;}
 function prereqMet(type){
-  if(techOf(type)>(MISSIONS[mission].tech||1))return false;   // not yet authorized this mission
+  if(techOf(type)>(activeMission().tech||1))return false;   // not yet authorized this mission
   // structures also require a conyard, or the prereq chain leaks (e.g. a refinery
   // only names 'power', so losing the conyard would still allow construction)
   if(BDEFS[type])return hasBuilding(PLAYER,'conyard')&&(!BDEFS[type].prereq||hasBuilding(PLAYER,BDEFS[type].prereq));
@@ -2835,7 +2867,7 @@ function buildSidebar(){
   box.innerHTML='';
   const activeTab=document.querySelector('.tab.active').dataset.tab;
   for(const type of SIDEBAR_ITEMS[activeTab]){
-    if(techOf(type)>(MISSIONS[mission].tech||1))continue;   // hidden until its campaign debut
+    if(techOf(type)>(activeMission().tech||1))continue;   // hidden until its campaign debut
     const d=BDEFS[type]||UDEFS[type];
     const el=document.createElement('div');
     el.className='icon'; el.dataset.type=type;
@@ -3055,7 +3087,7 @@ function updateAI(dt){
     const helipad=buildings.find(b=>b.owner===ENEMY&&b.type==='helipad');
     const armyCount=units.filter(u=>u.owner===ENEMY&&u.type!=='harvester').length;
     if(armyCount<ai.armyCap){
-      const tech=MISSIONS[mission].tech||1;   // the AI fields the same arsenal the mission introduces
+      const tech=activeMission().tech||1;   // the AI fields the same arsenal the mission introduces
       const roll=Math.random();
       let pick=null,src=null;
       if(factory&&helipad&&tech>=6&&roll<0.13&&credits[ENEMY]>=UDEFS.gunship.cost&&tick>ai.heavyAt){pick='gunship';src=factory;}
@@ -3070,8 +3102,11 @@ function updateAI(dt){
       else if(barracks&&tech>=2&&credits[ENEMY]>=UDEFS.rocketeer.cost){pick='rocketeer';src=barracks;}
       if(pick){credits[ENEMY]-=UDEFS[pick].cost;produceUnit(ENEMY,pick,src);}
     }
-    // replace harvester if lost
-    if(factory&&!units.some(u=>u.owner===ENEMY&&u.type==='harvester')&&credits[ENEMY]>=UDEFS.harvester.cost){
+    /* keep the ore moving: one harvester in the campaign, one per refinery plus
+       one in a skirmish, where the enemy lives on what it mines */
+    const refs=buildings.filter(b=>b.owner===ENEMY&&b.type==='refinery').length;
+    const wantH=activeMission().aiBuilds?Math.min(4,refs+1):1;
+    if(factory&&units.filter(u=>u.owner===ENEMY&&u.type==='harvester').length<wantH&&credits[ENEMY]>=UDEFS.harvester.cost){
       credits[ENEMY]-=UDEFS.harvester.cost;produceUnit(ENEMY,'harvester',factory);
     }
   }
@@ -3087,6 +3122,7 @@ function updateAI(dt){
     orderCapture(e,pool[0]);
   }
   if(tick%30===15&&readyUplink(ENEMY)){ const t=aiStrikeTarget(); if(t)launchStrike(ENEMY,t.x,t.y); }
+  updateAIConstruction(dt);
   // upkeep: the enemy repairs damaged structures while it can afford to
   if(tick%90===45)for(const b of buildings)
     if(b.owner===ENEMY&&b.hp<b.maxhp*0.7&&credits[ENEMY]>400)setRepair(b,true);
@@ -6045,7 +6081,7 @@ function updateHUD(){
   pv.textContent=pw.sup+'/'+pw.dem;
   pv.className=pw.ok?'':'low';
   pv.title=pw.ok?'Power supply / demand':'Low power: radar offline, production slowed, turrets silent';
-  const M=MISSIONS[mission], ol=document.getElementById('objline');
+  const M=activeMission(), ol=document.getElementById('objline');
   if(M.objType==='survive'&&started&&!gameOver){
     const s=Math.max(0,Math.ceil(surviveT));
     ol.textContent='SURVIVE '+(s/60|0)+':'+('0'+s%60).slice(-2);
@@ -6283,7 +6319,7 @@ function resetWorld(M){
   surviveT=M.surviveTime||0;
   const D=DIFFS[difficulty];
   credits=[Math.round(M.player.credits*D.pCred),Math.round(M.enemy.credits*D.eCred)];
-  Object.assign(ai,{credits:0,buildTimer:8,
+  Object.assign(ai,{credits:0,buildTimer:8,constr:null,
     nextWave:M.ai.waveFirst*D.waveInt,
     waveSize:Math.max(1,M.ai.waveSize+D.waveSize),
     income:M.ai.income*D.income,
@@ -6335,9 +6371,16 @@ function randomizeEnemyBase(M){
   return R;
 }
 function startMission(i){
+  mission=i; skirmish=null;
+  beginBattle(MISSIONS[i]);
+}
+function startSkirmish(cfg){
+  mission='skirmish'; skirmish=cfg;
+  beginBattle(cfg);
+}
+function beginBattle(cfg){
   if(splashOn)dismissSplash(true);   // harness/scripted starts skip the title card
-  mission=i;
-  const M=randomizeEnemyBase(MISSIONS[i]);
+  const M=randomizeEnemyBase(cfg);
   resetWorld(M);
   placeSide(PLAYER,M.player);
   placeSide(ENEMY,M.enemy);
@@ -6347,7 +6390,10 @@ function startMission(i){
      tile; the northward bias sits the base in the lower third of the screen so
      the ground you are about to expand into is the ground you can see. */
   camX=(PLAYER_HOME[0]+1.5)*TILE; camY=(PLAYER_HOME[1]+1.5)*TILE-90;
-  eva('Theatre: '+R3D.setTheme(i).toUpperCase());
+  /* a skirmish that starts with only an MCV looks at the MCV */
+  const mcv=units.find(u=>u.owner===PLAYER&&u.type==='mcv');
+  if(mcv&&!buildings.some(b=>b.owner===PLAYER)){camX=mcv.x;camY=mcv.y-90;selection=[mcv];}
+  eva('Theatre: '+R3D.setTheme(themeIndex()).toUpperCase());
   updateFog();
   buildSidebar();
   paused=false;
@@ -6357,6 +6403,122 @@ function startMission(i){
   document.getElementById('battlectl').style.display='flex';
   saveGame('Mission start — saved');   // checkpoint at the top of every mission
 }
+/* ================= SKIRMISH =================
+   A battle outside the campaign: a fresh random map, both sides at full
+   technology, and an enemy commander that builds its own base from its
+   Construction Yard (see updateAIConstruction). The player picks the
+   terrain, the starting treasury and whether to start with a base or only
+   an MCV; the threat level is the same setting the campaign uses. */
+const SKIRMISH_LANDS={
+  highlands: {name:'HIGHLANDS',   blurb:'Ridge walls broken by passes; ore in the valleys.',
+              land:{mountain:0.66,ridges:2,passes:3,trees:0.30,scrub:0.5,mud:0.10,boulders:26}},
+  riverlands:{name:'RIVERLANDS',  blurb:'Two rivers to cross, by bridge or by ford.',
+              land:{mountain:0.75,ridges:1,passes:3,trees:0.35,scrub:0.55,mud:0.15,boulders:20,rivers:2}},
+  plains:    {name:'OPEN PLAINS', blurb:'Little cover and nowhere to hide. Armour decides it.',
+              land:{mountain:0.82,ridges:0,passes:0,trees:0.18,scrub:0.7,mud:0.05,boulders:14}},
+  forest:    {name:'DEEP FOREST', blurb:'Dense woodland channels every advance.',
+              land:{mountain:0.72,ridges:1,passes:3,trees:0.85,scrub:0.4,mud:0.20,boulders:16}},
+};
+const SKIRMISH_CREDITS=[5000,10000,20000];
+const SKIRMISH_KEY='ironDominion.skirmish.v1';
+const skirmishOpts=(()=>{
+  const d={land:'highlands',credits:10000,start:'base'};
+  try{ const o=JSON.parse(localStorage.getItem(SKIRMISH_KEY)||'null');
+    if(o&&SKIRMISH_LANDS[o.land])d.land=o.land;
+    if(o&&SKIRMISH_CREDITS.includes(o.credits))d.credits=o.credits;
+    if(o&&(o.start==='base'||o.start==='mcv'))d.start=o.start; }catch(e){}
+  return d;
+})();
+function saveSkirmishOpts(){ try{localStorage.setItem(SKIRMISH_KEY,JSON.stringify(skirmishOpts));}catch(e){} }
+function makeSkirmish(o){
+  const L=SKIRMISH_LANDS[o.land];
+  const base=[['conyard',8,MAPH-13],['power',13,MAPH-12],['refinery',7,MAPH-8]];
+  const army=[['harvester',12,MAPH-6],['tank',16,MAPH-10],['trooper',16,MAPH-8],['trooper',17,MAPH-8],['engineer',15,MAPH-7]];
+  const player=o.start==='mcv'
+    ?{credits:o.credits,buildings:[],units:[['mcv',10,MAPH-11],['tank',14,MAPH-10],['trooper',13,MAPH-8],['trooper',14,MAPH-8]]}
+    :{credits:o.credits,buildings:base,units:army};
+  return {
+    code:'SKIRMISH \u00b7 '+L.name, name:'SKIRMISH', skirmish:true, aiBuilds:true,
+    seed:(Math.random()*1e9)|0, tech:10, land:Object.assign({},L.land), theme:(Math.random()*4)|0,
+    objType:'destroy_all', objShort:'DESTROY THE ENEMY COMMANDER',
+    brief:'', player,
+    enemy:{credits:o.credits,
+      buildings:[['conyard',MAPW-12,8],['power',MAPW-17,8],['refinery',MAPW-12,13]],
+      units:[['harvester',MAPW-14,17],['tank',MAPW-18,13],['trooper',MAPW-17,15],['trooper',MAPW-16,15]]},
+    ai:{income:3,buildInt:8,armyCap:26,waveInt:75,waveFirst:210,waveSize:3,waveCap:14,heavyAt:2400},
+  };
+}
+
+/* ---- the enemy commander's construction ----
+   A build order worked through as the treasury allows, the way a player
+   would: power first when it is short, refineries sited toward ore,
+   defences toward the player, everything else packed around the yard with a
+   lane left clear between structures. Destroyed structures are rebuilt
+   because the order is counted against what stands, not what was built. */
+const AI_BUILD_ORDER=['power','refinery','barracks','power','factory','turret','refinery','power','guardtower',
+  'turret','helipad','power','techlab','bastion','turret','power','uplink','bastion','power','turret','bastion'];
+function aiNextBuild(){
+  const need={}, have={};
+  for(const b of buildings)if(b.owner===ENEMY)have[b.type]=(have[b.type]||0)+1;
+  const pw=powerOf(ENEMY);
+  for(const t of AI_BUILD_ORDER){
+    need[t]=(need[t]||0)+1;
+    if((have[t]||0)>=need[t])continue;
+    /* a structure that would black the base out waits for a power plant */
+    if(t!=='power'&&pw.sup-pw.dem+BDEFS[t].power<0)return 'power';
+    return t;
+  }
+  return null;
+}
+function aiSite(type){
+  const yard=buildings.find(b=>b.owner===ENEMY&&b.type==='conyard');
+  if(!yard)return null;
+  const foe=buildings.find(b=>b.owner===PLAYER&&b.type==='conyard')||buildings.find(b=>b.owner===PLAYER);
+  const d=BDEFS[type], defence=!!d.dmg;
+  const toward=foe?Math.atan2(foe.y-yard.y,foe.x-yard.x):Math.PI*0.75;
+  let ore=null;
+  if(type==='refinery'){ let bd=1e9;
+    for(let k=0;k<terrain.length;k++)if(terrain[k]===T_ORE){const tx=k%MAPW,ty=(k/MAPW)|0,dd=Math.hypot(tx-yard.tx,ty-yard.ty);if(dd<bd){bd=dd;ore=[tx,ty];}} }
+  let best=null, bs=1e9;
+  const cx=yard.tx+1, cy=yard.ty+1;
+  for(let r=2;r<=13;r++)for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){
+    if(Math.max(Math.abs(dx),Math.abs(dy))!==r)continue;
+    const tx=cx+dx, ty=cy+dy;
+    if(!canPlace(type,tx,ty,ENEMY))continue;
+    /* keep a one-tile lane round every structure so nothing gets walled in */
+    let tight=false;
+    for(let yy=ty-1;yy<=ty+d.h&&!tight;yy++)for(let xx=tx-1;xx<=tx+d.w&&!tight;xx++)
+      if(inMap(xx,yy)&&occ[idx(xx,yy)]!==0)tight=true;
+    if(tight&&!d.barrier)continue;
+    const mx=tx+d.w/2, my=ty+d.h/2;
+    let score=Math.hypot(mx-cx,my-cy);
+    if(defence){ const a=Math.atan2(my-cy,mx-cx); let da=Math.abs(a-toward); if(da>Math.PI)da=6.283-da; score=da*6+Math.abs(Math.hypot(mx-cx,my-cy)-6); }
+    if(ore)score=Math.hypot(mx-ore[0],my-ore[1])+Math.hypot(mx-cx,my-cy)*0.3;
+    if(score<bs){bs=score;best=[tx,ty];}
+  }
+  return best;
+}
+function updateAIConstruction(dt){
+  const M=activeMission();
+  if(!M||!M.aiBuilds)return;
+  if(!buildings.some(b=>b.owner===ENEMY&&b.type==='conyard'&&b.built>=1)){ai.constr=null;return;}
+  if(!ai.constr){
+    const t=aiNextBuild();
+    if(!t)return;
+    ai.constr={type:t,progress:0,paid:0};
+  }
+  const c=ai.constr, d=BDEFS[c.type];
+  if(c.progress<1){
+    const rate=dt*(powerOf(ENEMY).ok?1:0.45)/d.build, chunk=Math.min(d.cost*rate,d.cost-c.paid);
+    if(credits[ENEMY]>=chunk){credits[ENEMY]-=chunk;c.paid+=chunk;c.progress=Math.min(1,c.progress+rate);}
+    return;
+  }
+  const site=aiSite(c.type);
+  if(!site){ if(tick%150===0){credits[ENEMY]+=c.paid;ai.constr=null;} return; }   // nowhere to put it: refund and move on
+  const b=addBuilding(ENEMY,c.type,site[0],site[1]); b.built=0;
+  ai.constr=null;
+}
+
 /* ================= CAMPAIGN PROGRESS =================
    What this browser's commander has earned. Missions unlock strictly in order:
    clearing one opens the next. So the record is a count of cleared missions
@@ -6463,14 +6625,60 @@ function showBoard(){
     if(missionOp(MISSIONS[i])!==op){ op=missionOp(MISSIONS[i]); grid.append(uiEl('div','mgroup',op)); }
     grid.append(missionCard(i));
   }
+  /* skirmish is always open: it is not part of the campaign */
+  grid.append(uiEl('div','mgroup','SKIRMISH'));
+  const sk=uiEl('button','mcard skirmish'); sk.type='button';
+  sk.setAttribute('aria-label','Skirmish \u2014 a random map against an AI commander');
+  sk.append(uiEl('span','mc-no','VS'));
+  const skb=uiEl('span','mc-body'), skh=uiEl('span','mc-head');
+  skh.append(uiEl('strong',null,'SKIRMISH'),uiEl('span','mc-badge ready','PLAY'));
+  skb.append(skh,uiEl('em',null,SKIRMISH_LANDS[skirmishOpts.land].name+' \u00b7 $'+skirmishOpts.credits.toLocaleString()),
+    uiEl('span','mc-blurb','A random map against an AI commander who builds its own base. Any unit, any structure.'));
+  sk.append(skb);
+  sk.addEventListener('click',()=>{ beep(440,0.05,'square',0.05); showSkirmishSetup(); });
+  grid.append(sk);
   const hidden=n-1-open;
   document.getElementById('classified').textContent=hidden>0
     ?hidden+' FURTHER MISSION'+(hidden>1?'S':'')+' CLASSIFIED · CLEAR '+MISSIONS[open].name+' TO ADVANCE'
     :'';
   showIntroScreen('board');
   /* Land keyboard focus on the mission to play next, so Enter plays on. */
-  const cards=grid.querySelectorAll('.mcard');
+  const cards=grid.querySelectorAll('.mcard:not(.skirmish)');
   (grid.querySelector('.mcard.frontier')||cards[cards.length-1])?.focus({preventScroll:true});
+}
+/* The skirmish setup reuses the briefing screen: the same threat selector,
+   controls and launch row, with the terrain / treasury / start choices where
+   the mission text would be. */
+function optRow(label,opts,cur,pick){
+  const row=uiEl('div','skrow'); row.append(uiEl('span','sklabel',label));
+  for(const [v,text] of opts){
+    const b=uiEl('button','msbtn'+(v===cur?' cur':''),text); b.type='button';
+    if(v!==cur)b.addEventListener('click',()=>{pick(v);saveSkirmishOpts();showSkirmishSetup();});
+    row.append(b);
+  }
+  return row;
+}
+function showSkirmishSetup(){
+  mission='skirmish';
+  document.getElementById('mcode').textContent='SKIRMISH';
+  const box=document.getElementById('mbrief'); box.replaceChildren();
+  const head=uiEl('b',null,'SKIRMISH'); box.append(head);
+  box.append(uiEl('p','skintro','Battle an enemy commander on a freshly generated map. Both sides have every unit and structure; the enemy builds its base from its Construction Yard just as you do.'));
+  box.append(optRow('TERRAIN',Object.entries(SKIRMISH_LANDS).map(([k,v])=>[k,v.name]),skirmishOpts.land,v=>skirmishOpts.land=v));
+  box.append(uiEl('p','skblurb',SKIRMISH_LANDS[skirmishOpts.land].blurb));
+  box.append(optRow('CREDITS',SKIRMISH_CREDITS.map(c=>[c,'$'+c.toLocaleString()]),skirmishOpts.credits,v=>skirmishOpts.credits=v));
+  box.append(optRow('START',[['base','BASE'],['mcv','MCV ONLY']],skirmishOpts.start,v=>skirmishOpts.start=v));
+  const ds=document.getElementById('dselect');
+  const lab=uiEl('span',null,'THREAT LEVEL:'); lab.id='dlabel';
+  ds.replaceChildren(lab);
+  for(let k=0;k<DIFFS.length;k++){
+    const b=uiEl('button','msbtn'+(k===difficulty?' cur':''),DIFFS[k].name); b.type='button';
+    if(k!==difficulty)b.addEventListener('click',()=>{ difficulty=k; Campaign.save(); showSkirmishSetup(); });
+    ds.append(b);
+  }
+  document.getElementById('startbtn').textContent='BEGIN SKIRMISH';
+  showIntroScreen('briefing');
+  document.getElementById('startbtn').focus({preventScroll:true});
 }
 function showBriefing(i){
   if(!Campaign.isUnlocked(i))i=Campaign.highestUnlocked;   // never brief a mission that has not been earned
@@ -6518,7 +6726,7 @@ function serializeState(){
   const tid=e=>(e&&e.hp>0)?e.id:0;
   return {
     v:SAVE_VER, savedAt:Date.now(),
-    mission, difficulty, credits:credits.slice(),
+    mission, skirmish, difficulty, credits:credits.slice(),
     tick, surviveT, nextId, camX, camY,
     grids:{
       terrain:b64FromBytes(terrain),
@@ -6539,7 +6747,8 @@ function serializeState(){
   };
 }
 function restoreState(S){
-  mission=S.mission; difficulty=S.difficulty;
+  mission=S.mission; skirmish=S.skirmish||null; difficulty=S.difficulty;
+  if(mission==='skirmish'&&!skirmish)mission=0;         // a damaged save falls back to the campaign
   credits=S.credits.slice(); tick=S.tick; surviveT=S.surviveT; nextId=S.nextId; camX=S.camX; camY=S.camY;
   terrain=bytesFromB64(S.grids.terrain);
   const ob=bytesFromB64(S.grids.ore); oreAmt=new Uint16Array(ob.buffer,0,MAPW*MAPH);
@@ -6581,7 +6790,7 @@ function restoreState(S){
   groups={}; for(const [k,ids] of Object.entries(S.groups||{}))groups[k]=ids.map(i=>byId.get(i)).filter(Boolean);
   if(!NF)buildNoiseFields();
   renderTerrainAll();
-  R3D.setTheme(mission);          // the theatre is part of the mission, so it restores with it
+  R3D.setTheme(themeIndex());     // the theatre is part of the mission, so it restores with it
   dctx.clearRect(0,0,decalCan.width,decalCan.height);
   R3D.decalChanged();
   gameOver=false; lastAttackWarn=-999; lowPower=!powerOf(PLAYER).ok;
@@ -6624,7 +6833,7 @@ function fmtSaveTime(S){
 function refreshResumeBtn(){
   const btn=document.getElementById('resumebtn'), S=readSave();
   if(S){const t=fmtSaveTime(S);
-    btn.textContent='RESUME — MISSION '+((S.mission|0)+1)+(t?'  ('+t+')':'');
+    btn.textContent='RESUME — '+(S.mission==='skirmish'?'SKIRMISH':'MISSION '+((S.mission|0)+1))+(t?'  ('+t+')':'');
     btn.style.display='block';
   } else btn.style.display='none';
 }
@@ -6815,7 +7024,8 @@ window.ID3={
     get camX(){ return camX; },           set camX(v){ camX=v; },
     get camY(){ return camY; },           set camY(v){ camY=v; },
     canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
-    Campaign, showBoard, showBriefing,
+    Campaign, showBoard, showBriefing, makeSkirmish, startSkirmish, showSkirmishSetup, get ai(){ return ai; },
+    simTick,
     setRepair, sellBuilding, setRally, spawnUnitAt, refreshActions, orderCapture, awardKill, dealDamage,
     get terrain(){ return terrain; }, T_WATER, T_BRIDGE, T_FORD, findPath,
     canDeploy, deployMCV, launchStrike, readyUplink, swChargeTime, get strikes(){ return strikes; },
@@ -6829,6 +7039,41 @@ function setup(){
   buildSprites();
   Campaign.load();
   showBoard();
+}
+/* One fixed simulation step: everything the world does in 1/30 s. The loop
+   runs it; so do the tests, so a scripted minute is a real minute of play. */
+function simTick(){
+  tick++;
+  if(surviveT>0)surviveT-=STEP;
+  updateCamera(STEP);
+  for(const u of units)updateUnit(u,STEP);
+  for(const b of buildings)updateBuilding(b,STEP);
+  updateProjectiles(STEP);
+  updateQueues(STEP);
+  updateRepairs(STEP);
+  updateVeterans(STEP);
+  updateSuperweapons(STEP);
+  updateRollouts(STEP);
+  updateAI(STEP);
+  shake*=0.85;
+  if(tick%240===0){dctx.globalCompositeOperation='destination-out';dctx.fillStyle='rgba(0,0,0,0.05)';
+    dctx.fillRect(0,0,decalCan.width,decalCan.height);dctx.globalCompositeOperation='source-over';}
+  if(tick%5===0){
+    const span=R3D.dist/TILE;
+    const otx=(camX/TILE+(Math.random()-0.5)*span)|0, oty=(camY/TILE+(Math.random()-0.5)*span)|0;
+    if(inMap(otx,oty)&&terrain[idx(otx,oty)]===2&&visible[idx(otx,oty)])
+      particles.push({x:(otx+Math.random())*TILE,y:(oty+Math.random())*TILE,vx:0,vy:-5,
+        life:0.5,max:0.5,size:1.8,c:'#aefadf',kind:'spark'});
+  }
+  if(tick%10===0)updateFog();
+  if(tick%8===0){refreshIcons();updateHUD();}
+  else if(tick%4===0)refreshActions(false);
+  if(tick%12===0)renderRadar();
+  if(tick%15===0){
+    const pok=powerOf(PLAYER).ok;
+    if(!pok&&!lowPower){lowPower=true;eva('Low power - radar offline');beep(160,0.22,'sawtooth',0.07);renderRadar();}
+    else if(pok&&lowPower){lowPower=false;eva('Power restored');beep(620,0.12,'square',0.06);renderRadar();}
+  }
 }
 let last=0, acc=0;
 const STEP=1/30;
@@ -6847,44 +7092,15 @@ function loop(ts){
   while(acc>=STEP){
     acc-=STEP;
     if(!gameOver){
-      tick++;
-      if(surviveT>0)surviveT-=STEP;
-      updateCamera(STEP);
-      for(const u of units)updateUnit(u,STEP);
-      for(const b of buildings)updateBuilding(b,STEP);
-      updateProjectiles(STEP);
-      updateQueues(STEP);
-      updateRepairs(STEP);
-      updateVeterans(STEP);
-      updateSuperweapons(STEP);
-      updateRollouts(STEP);
-      updateAI(STEP);
-      shake*=0.85;
-      if(tick%240===0){dctx.globalCompositeOperation='destination-out';dctx.fillStyle='rgba(0,0,0,0.05)';
-        dctx.fillRect(0,0,decalCan.width,decalCan.height);dctx.globalCompositeOperation='source-over';}
-      if(tick%5===0){
-        const span=R3D.dist/TILE;
-        const otx=(camX/TILE+(Math.random()-0.5)*span)|0, oty=(camY/TILE+(Math.random()-0.5)*span)|0;
-        if(inMap(otx,oty)&&terrain[idx(otx,oty)]===2&&visible[idx(otx,oty)])
-          particles.push({x:(otx+Math.random())*TILE,y:(oty+Math.random())*TILE,vx:0,vy:-5,
-            life:0.5,max:0.5,size:1.8,c:'#aefadf',kind:'spark'});
-      }
-      if(tick%10===0)updateFog();
-      if(tick%8===0){refreshIcons();updateHUD();}
-      else if(tick%4===0)refreshActions(false);
-      if(tick%12===0)renderRadar();
-      if(tick%15===0){
-        const pok=powerOf(PLAYER).ok;
-        if(!pok&&!lowPower){lowPower=true;eva('Low power - radar offline');beep(160,0.22,'sawtooth',0.07);renderRadar();}
-        else if(pok&&lowPower){lowPower=false;eva('Power restored');beep(620,0.12,'square',0.06);renderRadar();}
-      }
+      simTick();
     } else updateCamera(STEP);
   }
   render(dt);
 }
 document.getElementById('startbtn').addEventListener('click',()=>{
   document.getElementById('intro').style.display='none';
-  startMission(mission);
+  if(mission==='skirmish')startSkirmish(makeSkirmish(skirmishOpts));
+  else startMission(mission);
   beep(523,0.1,'square',0.08);setTimeout(()=>beep(784,0.12,'square',0.08),120);
   eva('Battle control online');
 });

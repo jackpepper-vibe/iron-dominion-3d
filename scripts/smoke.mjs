@@ -46,9 +46,9 @@ const passSplash = async () => {
   await page.waitForFunction(() => getComputedStyle(document.getElementById('splash')).display === 'none');
 };
 await passSplash();
-const cardCount = () => page.evaluate(() => document.querySelectorAll('#missions .mcard').length);
+const cardCount = () => page.evaluate(() => document.querySelectorAll('#missions .mcard:not(.skirmish)').length);
 const fresh = await page.evaluate(() => ({
-  cards: document.querySelectorAll('#missions .mcard').length,
+  cards: document.querySelectorAll('#missions .mcard:not(.skirmish)').length,
   boardShown: !document.getElementById('board').hidden,
 }));
 check('fresh commander sees only mission 1', fresh.boardShown && fresh.cards === 1,
@@ -58,13 +58,13 @@ const won = await page.evaluate(() => {
   const S = ID3.sim;
   const opened = S.Campaign.recordClear(0, 2);
   S.showBoard();
-  const cards = [...document.querySelectorAll('#missions .mcard')];
+  const cards = [...document.querySelectorAll('#missions .mcard:not(.skirmish)')];
   return { opened, cards: cards.length, badge: cards[0].querySelector('.mc-badge').textContent };
 });
 check('a victory unlocks the next mission and badges the cleared one',
   won.opened && won.cards === 2 && /CLEARED.*HARD/.test(won.badge), `${won.cards} cards, "${won.badge}"`);
 
-await page.locator('#missions .mcard').nth(1).click();
+await page.locator('#missions .mcard:not(.skirmish)').nth(1).click();
 const brief = await page.evaluate(() => ({
   briefing: !document.getElementById('briefing').hidden,
   code: document.getElementById('mcode').textContent,
@@ -361,6 +361,19 @@ const river = await page.evaluate(() => {
 });
 check('a river map has water and bridges, and the bases are joined by land',
   river.water > 40 && river.bridge >= 2 && river.path, JSON.stringify(river));
+
+/* ---- skirmish: the enemy commander builds a base from its yard ---- */
+const sk = await page.evaluate(() => {
+  const S = ID3.sim;
+  S.startSkirmish(S.makeSkirmish({ land: 'plains', credits: 10000, start: 'base' }));
+  const b0 = S.buildings.filter(b => b.owner === 1).length;
+  for (let i = 0; i < 30 * 150; i++) S.simTick();                 // two and a half minutes
+  const types = new Set(S.buildings.filter(b => b.owner === 1).map(b => b.type));
+  return { b0, b1: S.buildings.filter(b => b.owner === 1).length, factory: types.has('factory'),
+           barracks: types.has('barracks'), army: S.units.filter(u => u.owner === 1 && u.type !== 'harvester').length };
+});
+check('in skirmish the enemy builds its own base and army',
+  sk.b1 >= sk.b0 + 4 && sk.factory && sk.barracks && sk.army > 3, JSON.stringify(sk));
 
 /* ---- save / restore survives the new camera semantics ---- */
 const save = await page.evaluate(() => {
