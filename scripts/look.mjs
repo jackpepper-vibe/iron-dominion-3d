@@ -47,6 +47,13 @@ const POSES = [
       units.forEach((t, i) => { const u = ID3.spawn(0, t, 5 + i * 2.2, y0 + 5); u.angle = -0.5; });
       ID3.look(15, y0 + 3, 640);
     } },
+  { name: 'units', mission: 0, steps: 1, setup: () => {
+      /* every unit type at inspection distance, Dominion in front, Scourge behind */
+      const S = ID3.sim, y0 = S.MAPH - 26, types = ['trooper', 'rocketeer', 'grenadier', 'buggy', 'tank', 'heavy', 'artillery', 'harvester'];
+      types.forEach((t, i) => { const u = ID3.spawn(0, t, 6 + i * 1.6, y0 + 2.2); u.angle = -0.6; if (t === 'harvester') u.cargo = 350; });
+      types.forEach((t, i) => { const u = ID3.spawn(1, t, 6 + i * 1.6, y0); u.angle = 2.5; });
+      ID3.look(13, y0 + 1, 400);
+    } },
   { name: 'ore', mission: 2, steps: 90, setup: () => {
       const S = ID3.sim, h = S.units.find(u => u.type === 'harvester' && u.owner === 0);
       ID3.step(400, 1 / 30);   // let it drive out to a seam

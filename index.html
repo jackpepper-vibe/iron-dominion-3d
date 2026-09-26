@@ -3045,7 +3045,7 @@ function col(hex){ return new THREE.Color(hex); }
    9-unit hatch. Seams fade out once they would be thinner than a pixel, so a
    zoomed-out base does not shimmer. */
 const SURFACE={uGrime:{value:null}};           // R3D fills in its rock detail as the noise source
-const SURF_NONE=0, SURF_PLATE=1, SURF_SLAB=2, SURF_EARTH=3, SURF_HAZARD=4, SURF_SHUTTER=5;
+const SURF_NONE=0, SURF_PLATE=1, SURF_SLAB=2, SURF_EARTH=3, SURF_HAZARD=4, SURF_SHUTTER=5, SURF_TREAD=6, SURF_GRILLE=7;
 const SURFACE_KIND={};                          // hex -> kind; anything unlisted is plate
 function surfaceify(mat,kind,baked){
   if(kind===SURF_NONE)return mat;
@@ -3101,6 +3101,10 @@ float surfCell( vec2 uv, vec2 cell, float stagger ){
          } else if ( uSurf < 2.5 ) {          // poured concrete: big slabs, stained
            c *= 1.0 - 0.30 * surfSeam( fuv, vec2( 16.0, 16.0 ), 0.0 );
            c *= 0.90 + 0.16 * surfCell( fuv, vec2( 16.0, 16.0 ), 0.0 );
+         } else if ( uSurf > 6.5 ) {          // engine grille: deep slots
+           c *= 0.45 + 0.55 * step( 0.45, fract( fuv.x / 1.3 ) );
+         } else if ( uSurf > 5.5 ) {          // track links: cross grooves every link
+           c *= 0.5 + 0.5 * step( 0.38, fract( fuv.x / 2.3 ) );
          } else if ( uSurf > 4.5 ) {          // roll-up shutter: horizontal slats
            float sl = fract( fuv.y / 1.6 );
            c *= 0.72 + 0.28 * smoothstep( 0.0, 0.25, sl ) * ( 1.0 - smoothstep( 0.8, 1.0, sl ) );
@@ -3149,8 +3153,8 @@ function M(hex,flat,glow,baked){
    the two sides must be told apart by the hull, at a glance and at any
    zoom, not only by a stripe of trim. */
 const FACTION_PLATES=[
-  {'#5b636f':'#7d7560','#434a55':'#5f5949','#727b88':'#958c74'},
-  {'#5b636f':'#4f545b','#434a55':'#393d44','#727b88':'#676c75'},
+  {'#5b636f':'#7d7560','#434a55':'#5f5949','#727b88':'#958c74','#5d6650':'#626a48','#3f4637':'#454b35'},
+  {'#5b636f':'#4f545b','#434a55':'#393d44','#727b88':'#676c75','#5d6650':'#2f3236','#3f4637':'#1f2124'},
 ];
 /* ---- static merge ----
    A structure is sixty-odd primitives, and a base of forty structures was a
@@ -3377,7 +3381,7 @@ Object.assign(SURFACE_KIND,{
   [RUST]:SURF_EARTH, '#7b6a44':SURF_EARTH,                        // sandbags
   '#2c2a1e':SURF_EARTH, '#4a4230':SURF_EARTH, '#5b4c32':SURF_EARTH, // trench spoil and boards
   [GLASS]:SURF_NONE, '#1b1f26':SURF_NONE, '#cfd3d8':SURF_NONE,    // glazing, canopy, pad markings
-  [SHUTTER]:SURF_SHUTTER, [HAZARD]:SURF_HAZARD,
+  [SHUTTER]:SURF_SHUTTER, [HAZARD]:SURF_HAZARD, '#2fc98c':SURF_NONE,   // ore load is crystal, not plate
 });
 
 /* ---- greeble kit ----
@@ -3677,15 +3681,60 @@ const BMODELS={
    Authored nose-along-+X, origin at the contact patch. Anything that traverses
    independently of the hull is returned as `tur`; `muzzle` is where tracers and
    flashes are born, in model space. */
-const TRACK='#2b2f36', TYRE='#212429', STEEL='#6e7580', OLIVE='#5d6650', SKIN='#a8815c';
-function tracks(g,len,wid,h,off){
+const TRACK='#2b2f36', TYRE='#212429', STEEL='#6e7580', OLIVE='#5d6650', SKIN='#a8815c',
+      TREAD='#2c2e31', GRILLE='#3b3f45', WHEELS='#3a3f47';
+Object.assign(SURFACE_KIND,{[TREAD]:SURF_TREAD,[GRILLE]:SURF_GRILLE,[SKIN]:SURF_NONE});
+/* ---- vehicle kit ----
+   Armour is shaped in side profile — sloped glacis, raked rear, undercut
+   belly — as a polygon in the XY plane (x along the hull, y up) extruded
+   across the width. One solid instead of a stack of boxes, and it is the
+   slopes that make a tank read as a tank from an RTS camera. */
+function profile(g,pts,width,hex,z=0){
+  const geo=new THREE.ExtrudeGeometry(new THREE.Shape(pts.map(([x,y])=>new THREE.Vector2(x,y))),
+    {depth:width,bevelEnabled:false});
+  geo.translate(0,0,-width/2);
+  const m=new THREE.Mesh(geo,M(hex,true)); m.position.z=z;
+  m.castShadow=true; m.receiveShadow=true; g.add(m); return m;
+}
+/* Track assemblies: a tread belt with raked ends, drive sprocket forward,
+   idler aft, road wheels between, and a fender over the top. */
+function trackAssembly(g,len,wid,h,off){
+  const L=len/2;
   for(const sz of [-1,1]){
-    blk(g,len,h,wid,TRACK,0,0,sz*off,true);                       // track run
-    for(let i=0;i<6;i++)                                          // road wheels
-      wheel(g,h*0.5,wid*0.86,'#2c3037',-len/2+4+i*(len-8)/5,h*0.5,sz*off);
-    blk(g,len*0.94,1.6,wid*1.12,'#33383f',0,h*0.72,sz*off,true);  // return-roller guard
+    const z=sz*off;
+    profile(g,[[-L+h*0.45,0],[L-h*0.45,0],[L,h*0.5],[L-h*0.25,h*0.92],[-L+h*0.25,h*0.92],[-L,h*0.5]],wid,TREAD,z);
+    const zo=z+sz*(wid/2+0.25);
+    wheel(g,h*0.40,0.9,WHEELS,L-h*0.42,h*0.52,zo);                // sprocket
+    wheel(g,h*0.36,0.9,WHEELS,-L+h*0.42,h*0.52,zo);               // idler
+    const n=Math.max(3,Math.round((len-h*1.8)/(h*0.72)));
+    for(let i=0;i<n;i++){
+      const x=-L+h*0.95+i*(len-h*1.9)/(n-1);
+      wheel(g,h*0.31,1.0,WHEELS,x,h*0.36,zo);
+      cyl(g,h*0.11,0.3,IRON,x,h*0.36,zo+sz*0.55);                // hub
+    }
+    blk(g,len*0.97,1.1,wid+1.4,PLATE_D,0,h*0.92,z,true);          // fender
   }
 }
+/* A gun tube along +x from (x,y,z): tube, bore evacuator, muzzle brake.
+   Returns the muzzle's x. */
+function barrel(g,len,r,x,y,z,hex=IRON){
+  const tube=new THREE.Mesh(G_CYL,M(hex,false));
+  tube.scale.set(r*2,len,r*2); tube.rotation.z=-Math.PI/2; tube.position.set(x+len/2,y,z);
+  tube.castShadow=true; tube.receiveShadow=true; g.add(tube);
+  const ev=new THREE.Mesh(G_CYL,M(hex,false));
+  ev.scale.set(r*3,len*0.13,r*3); ev.rotation.z=-Math.PI/2; ev.position.set(x+len*0.58,y,z);
+  ev.castShadow=true; g.add(ev);
+  blk(g,r*2.8,r*2.3,r*2.8,BLACK,x+len+r*1.1,y-r*1.15,z,true);
+  return x+len+r*2.5;
+}
+function cupola(g,x,y,z,r=2){
+  cyl(g,r,1.8,PLATE_L,x,y,z,true);
+  blk(g,r*1.3,0.6,r*1.3,PLATE_D,x-r*0.4,y+1.8,z,true);             // open hatch lid
+  blk(g,5,0.9,0.9,IRON,x+2.5,y+2.4,z,true);                         // pintle MG
+}
+function whip(g,x,y,z,h=11){ cyl(g,0.22,h,IRON,x,y,z); cyl(g,0.5,1,IRON,x,y,z); }
+function headlights(g,x,y,z){ for(const sz of [-1,1]) put(g,G_SPH,1.3,1.3,1.3,WINDOW,x,y,z*sz,false,true); }
+
 const UMODELS={
   trooper(g,trim,dark){ infantry(g,trim,'rifle'); },
   rocketeer(g,trim,dark){ infantry(g,trim,'tube'); },
@@ -3705,47 +3754,61 @@ const UMODELS={
     g.userData.tur=t; g.userData.muzzle=new THREE.Vector3(8,12.5,0);
   },
   tank(g,trim,dark){
-    tracks(g,30,7,7,7);
-    blk(g,26,5,12,PLATE,0,6.6,0,true);               // hull
-    blk(g,10,4,12,PLATE_L,9,6.6,0,true);             // glacis
-    stripe(g,7,10,trim,-8,11.7,0);
-    const t=new THREE.Group(); t.position.set(-1,11.6,0); g.add(t);
-    blk(t,14,5.5,11,PLATE,0,0,0,true);               // turret
-    blk(t,8,3,8,PLATE_L,-1,5.5,0,true);
-    blk(t,17,2.2,2.2,IRON,10,2.2,0,true);            // barrel
-    blk(t,3.4,3,3,BLACK,19.5,1.8,0,true);
-    cyl(t,1.1,3,IRON,-5,5.5,3.4);
-    g.userData.tur=t; g.userData.muzzle=new THREE.Vector3(22,14,0);
+    trackAssembly(g,32,4.8,7.6,6.2);
+    /* lower hull between the tracks, upper hull over them with a long glacis */
+    profile(g,[[-15,2],[13,2],[15.5,5],[15.5,7.4],[-15.5,7.4],[-15.5,4]],7.8,PLATE_D);
+    profile(g,[[-15.8,7.4],[16.2,7.4],[10.5,10.8],[-13.5,11.2],[-15.8,10]],15.4,PLATE);
+    blk(g,8,0.8,9,GRILLE,-10.5,10.9,0);                             // engine deck
+    for(const sz of [-1,1]) blk(g,6,2.4,2.2,PLATE_D,-6,8.5,sz*7.2,true);   // stowage bins
+    headlights(g,15.3,8.6,5.6);
+    stripe(g,5,3,trim,12.2,9.6,0).rotation.z=-0.52;                  // glacis bar
+    const t=new THREE.Group(); t.position.set(-1.5,11,0); g.add(t);
+    taper(t,15,11.5,5.4,12.5,9.5,PLATE,0,0,0);                       // cast turret
+    blk(t,3.4,4.2,6.4,PLATE_D,7.8,0.6,0,true);                       // mantlet
+    const mx=barrel(t,16,1.05,9.2,2.7,0);
+    cupola(t,-2.5,5.4,2.6);
+    blk(t,4.4,2.6,8,PLATE_D,-8.6,0.9,0,true);                        // bustle rack
+    whip(t,-7.5,5.4,-3.8);
+    for(const sz of [-1,1]) stripe(t,6,1.2,trim,-1,3,sz*6.1).rotation.x=sz*0.36;
+    g.userData.tur=t; g.userData.muzzle=new THREE.Vector3(mx-1.5,13.7,0);
   },
   heavy(g,trim,dark){
-    tracks(g,36,9,9,8.5);
-    blk(g,32,6,15,PLATE,0,8.6,0,true);
-    blk(g,12,5,15,PLATE_L,11,8.6,0,true);
-    for(const sz of [-1,1]) blk(g,30,2,2,IRON,0,14.6,sz*7.6,true);   // side skirts
-    stripe(g,8,13,trim,-10,14.7,0);
-    const t=new THREE.Group(); t.position.set(-1,14.6,0); g.add(t);
-    blk(t,17,7,14,PLATE,0,0,0,true);
-    blk(t,10,4,10,PLATE_L,-1,7,0,true);
-    for(const sz of [-1,1]){                         // twin main armament
-      blk(t,20,2.6,2.6,IRON,12,2.6,sz*3.2,true);
-      blk(t,4,3.4,3.4,BLACK,23,2.2,sz*3.2,true);
-    }
-    blk(t,4,2.6,7,PLATE_D,-8,7,0,true);
-    g.userData.tur=t; g.userData.muzzle=new THREE.Vector3(27,18,0);
+    trackAssembly(g,39,5.6,9,8);
+    profile(g,[[-18,2.4],[16,2.4],[19,6],[19,8.8],[-19,8.8],[-19,5]],10.4,PLATE_D);
+    profile(g,[[-19.4,8.8],[19.8,8.8],[13,13],[-16.5,13.4],[-19.4,12]],19.6,PLATE);
+    for(const sz of [-1,1]) profile(g,[[-17,3.6],[17,3.6],[18.5,8.8],[-18.5,8.8]],1.2,PLATE_D,sz*11.2);   // side skirts
+    blk(g,10,0.8,12,GRILLE,-12.5,13.1,0);
+    for(const sz of [-1,1]) blk(g,7,2.8,2.6,PLATE_D,-5,9.8,sz*9,true);
+    headlights(g,19,10.2,7);
+    stripe(g,6,3.6,trim,15,11.5,0).rotation.z=-0.55;
+    const t=new THREE.Group(); t.position.set(-2,13.2,0); g.add(t);
+    taper(t,19,14.5,6.6,16,12.5,PLATE,0,0,0);
+    blk(t,4,5.2,10,PLATE_D,9.6,0.8,0,true);
+    let mx=0;
+    for(const sz of [-1,1]) mx=barrel(t,18,1.2,11.2,3.3,sz*3);
+    cupola(t,-3,6.6,3.6,2.3);
+    blk(t,5,3,10,PLATE_D,-11,1.2,0,true);
+    whip(t,-10,6.6,-5,13); whip(t,-10,6.6,5,9);
+    for(const sz of [-1,1]) stripe(t,8,1.4,trim,-1,3.6,sz*7.9).rotation.x=sz*0.36;
+    g.userData.tur=t; g.userData.muzzle=new THREE.Vector3(mx-2,16.5,0);
   },
   artillery(g,trim,dark){
-    tracks(g,28,7,6.5,6.5);
-    blk(g,24,5,11,PLATE,0,6,0,true);
-    blk(g,8,4,11,PLATE_L,-9,6,0,true);               // recoil spade
-    stripe(g,6,9,trim,-6,11.2,0);
-    const t=new THREE.Group(); t.position.set(-3,11,0); g.add(t);
-    blk(t,9,5,10,PLATE_D,0,0,0,true);                // trunnion cradle
-    for(const sz of [-1,1]) blk(t,3,7,1.6,IRON,0,3,sz*4.6,true);
-    const bar=blk(t,30,2.4,2.4,IRON,13,5,0,true);    // long tube, elevated
-    bar.rotation.z=0.30; bar.position.set(14,7.6,0);
-    const mb=blk(t,4,3.4,3.4,BLACK,28,5,0,true);
-    mb.rotation.z=0.30; mb.position.set(29,12,0);
-    g.userData.tur=t; g.userData.muzzle=new THREE.Vector3(32,24,0);
+    trackAssembly(g,30,4.6,7,6);
+    profile(g,[[-14,2],[12.5,2],[15,5],[15,7],[-15,7],[-15,4]],7.6,PLATE_D);
+    profile(g,[[-15.2,7],[15.6,7],[12,9.6],[-15.2,9.6]],14.8,PLATE);
+    for(const sz of [-1,1]) blk(g,4,6,1.4,PLATE_D,-15,2,sz*5.4,true);   // recoil spades
+    headlights(g,15,8,5.4);
+    const t=new THREE.Group(); t.position.set(-3,9.6,0); g.add(t);
+    blk(t,12,3,11,PLATE_D,0,0,0,true);                               // gun platform
+    for(const sz of [-1,1]) blk(t,5,6.5,1.4,PLATE,1,2.6,sz*4.3,true); // trunnion cheeks
+    const el=new THREE.Group(); el.position.set(2,6,0); el.rotation.z=0.32; t.add(el);
+    blk(el,7,3.4,5,PLATE,0.5,-1.7,0,true);                            // cradle
+    const mx=barrel(el,26,1.0,3,0,0);
+    blk(t,4,4,8,PLATE_L,-6,3,0,true);                                 // ammunition locker
+    stripe(t,10,1.4,trim,0,3.1,0);
+    g.userData.tur=t;
+    const m=new THREE.Vector3(mx,0,0).applyAxisAngle(new THREE.Vector3(0,0,1),0.32);
+    g.userData.muzzle=new THREE.Vector3(m.x-1,9.6+6+m.y,0);
   },
   gunship(g,trim,dark){
     blk(g,20,7,8,PLATE,1,4,0,true);                  // fuselage
@@ -3773,49 +3836,72 @@ const UMODELS={
     g.userData.muzzle=new THREE.Vector3(17,3,0);
   },
   harvester(g,trim,dark){
-    tracks(g,34,9,8,9);
-    blk(g,26,10,18,PLATE,-3,8,0,true);               // ore bin
-    blk(g,26,2,18,PLATE_D,-3,18,0,true);
-    blk(g,9,9,14,PLATE_L,14,8,0,true);               // cab
-    blk(g,1.5,5,12,GLASS,18.4,11,0);
-    stripe(g,7,16,trim,-12,18.2,0);
-    /* bucket wheel: the working end, and the reason a harvester is instantly
-       readable at any zoom */
-    const w=new THREE.Group(); w.position.set(19,6,0); g.add(w);
-    wheel(w,6,15,STEEL,0,0,0);
-    for(let i=0;i<8;i++){                            // cutting buckets
-      const a=i/8*6.2832;
-      const b=blk(w,4,3.4,16,'#6c737d',0,0,0,true);
-      b.position.set(Math.cos(a)*6.5,Math.sin(a)*6.5,0); b.rotation.z=a;
+    /* The ore hauler: a big raked hopper behind a forward cab, riding wide
+       tracks, with the cutter drum out front — the silhouette a player learns
+       to protect. */
+    trackAssembly(g,36,6,8.6,8);
+    profile(g,[[-18,2.4],[15,2.4],[17,5],[17,8.6],[-18,8.6],[-18.5,5]],10,PLATE_D);
+    profile(g,[[-18.6,8.6],[6,8.6],[7.5,19.6],[-18.6,19.6]],20.4,PLATE);             // hopper
+    for(let i=0;i<4;i++) for(const sz of [-1,1]) blk(g,1.4,10,0.9,PLATE_D,-15+i*5.6,8.6,sz*10.5,true);  // ribs
+    /* an open bin: a rim frame round a dark floor, so the load shows */
+    blk(g,24.6,0.3,18.2,BLACK,-5.6,19.6,0);
+    for(const sz of [-1,1]) blk(g,25.8,1.8,1.4,IRON,-5.5,19.6,sz*9.6,true);
+    for(const sx of [-1,1]) blk(g,1.4,1.8,20.4,IRON,-5.5+sx*12.4,19.6,0,true);
+    profile(g,[[6.4,8.6],[16.5,8.6],[16.5,12],[14,17.5],[6.4,17.5]],9,PLATE_L,5.4);   // cab
+    blk(g,0.6,3.4,7.6,'#1c2229',14.9,12.6,5.4).rotation.z=0.42;       // windscreen
+    for(const sz of [-1,1]) put(g,G_SPH,1.3,1.3,1.3,WINDOW,16.6,10.6,5.4+sz*3,false,true);
+    cyl(g,1.1,9,IRON,9,17.5,-5); cyl(g,1.5,1,BLACK,9,26.5,-5);        // exhaust stack
+    ANIM.blink(g,lamp(g,1.1,'#ffb640',11,17.5,8),0);                  // working beacon
+    for(const sz of [-1,1]) stripe(g,14,2.4,trim,-6,21.5,sz*9.6);
+    for(const sz of [-1,1]) blk(g,3,1.6,2,HAZARD,-18.8,4,sz*6,true);  // rear bumpers
+    const w=new THREE.Group(); w.position.set(21,6,0); g.add(w);
+    for(const sz of [-1,1]) blk(g,6,3,1.6,IRON,18.4,4.5,sz*8.5,true); // drum arms
+    wheel(w,5.4,15,STEEL,0,0,0);
+    for(let i=0;i<10;i++){                                            // cutting teeth
+      const a=i/10*6.2832, b2=blk(w,3.4,2.6,15.6,'#6c737d',0,0,0,true);
+      b2.position.set(Math.cos(a)*5.8,Math.sin(a)*5.8,0); b2.rotation.z=a;
     }
     g.userData.wheel=w;
-    /* The load itself. Scale and lift move together so the pile grows upward
-       out of the bin floor instead of expanding through it. */
-    const ore=put(g,G_BOX,22,7,14,'#37a67e',-3,11,0,false,true);
+    const ore=put(g,G_ROCK,22,6,16,'#2fc98c',-5.6,19.4,0,true);         // the heap: faceted, lit
     ore.visible=false; g.userData.ore=ore;
+    g.userData.oreDims={w:22,h:6,d:16,y:19.4};                        // bin floor and full heap
   },
 };
+/* Infantry wear their side's uniform (re-skinned by livery like armour
+   plate), with the faction colour as armbands and a helmet band — soldiers,
+   not painted tokens. Posed a little larger than life so a squad stays
+   legible at battle zoom, as Command & Conquer's always were. */
 function infantry(g,trim,weapon){
-  blk(g,2.6,5,2.4,OLIVE,-0.4,0,-1.6,true);           // legs
-  blk(g,2.6,5,2.4,OLIVE,-0.4,0,1.6,true);
-  const t=new THREE.Group(); g.add(t); g.userData.tur=t;
-  blk(t,5,7,6.4,trim,0,5,0,true);                    // torso
-  blk(t,5.6,1.4,6.8,'#3a3f47',0,8.4,0,true);         // webbing
-  put(t,G_SPH,5,4,5.4,'#48503e',0,11.6,0);           // helmet
-  put(t,G_SPH,3.4,3.6,3.4,SKIN,0.4,10.2,0);          // face
+  const k=1.25, U=OLIVE, D='#3f4637';
+  const body=new THREE.Group(); body.scale.setScalar(k); g.add(body);
+  for(const sz of [-1,1]){
+    blk(body,2.2,4.8,2,U,-0.3,0,sz*1.3,true);                        // legs
+    blk(body,2.8,1.2,2.2,'#23262a',0.2,0,sz*1.3,true);               // boots
+  }
+  const t=new THREE.Group(); body.add(t); g.userData.tur=t;
+  blk(t,3.6,5.6,5,U,0,4.6,0,true);                                   // torso
+  blk(t,4,1.3,5.4,D,0,6.2,0,true);                                   // webbing
+  blk(t,2.6,4,3.8,D,-2.9,5.4,0,true);                                // pack
+  for(const sz of [-1,1]){
+    blk(t,1.5,4.2,1.5,U,0.8,5.8,sz*3,true);                           // arms
+    blk(t,1.6,1.2,1.6,trim,0.8,8.4,sz*3.02);                          // armbands
+  }
+  put(t,G_SPH,3,3,3.2,SKIN,0.3,10.1,0);                              // face
+  put(t,G_SPH,4.2,3.2,4.4,D,0,11.1,0,true);                          // helmet
+  blk(t,4.3,0.8,4.5,trim,0,11.6,0);
   if(weapon==='tube'){
-    blk(t,13,2.6,2.6,'#3a414c',5,7.6,-2.2,true);
-    blk(t,3,3.4,3.4,'#1e232b',12,7.2,-2.2,true);
-    blk(t,2.4,2,2,trim,3,7.6,-2.2);
+    const tube=new THREE.Mesh(G_CYL,M('#3a414c',false));
+    tube.scale.set(2.4,12,2.4); tube.rotation.z=-Math.PI/2; tube.position.set(3.5,9.4,-2.4); tube.castShadow=true; t.add(tube);
+    blk(t,2.6,2.6,2.6,trim,-2,8.1,-2.4);
   } else if(weapon==='lobber'){
-    blk(t,8,2.2,2.2,IRON,4,7.4,-2.2,true);
-    blk(t,4,3.2,3.2,'#454a51',9,7,-2.2,true);
+    blk(t,7,1.8,1.8,IRON,4,6.6,-2.6,true);
+    cyl(t,1.6,2.2,'#454a51',6.5,6.3,-2.6,true);
   } else {
-    blk(t,11,1.5,1.5,IRON,4.5,7.6,-2.2,true);
-    blk(t,3,1.2,2.6,'#5b4c32',1.5,7.4,-2.2,true);
+    blk(t,9,1.2,1.2,IRON,4,7,-2.6,true);
+    blk(t,3,1.4,1.8,'#5b4c32',1.5,6.6,-2.6,true);
   }
   g.userData.legs=true;
-  g.userData.muzzle=new THREE.Vector3(12,8,-2.2);
+  g.userData.muzzle=new THREE.Vector3(11*k,8*k,-2.4*k);
 }
 
 /* Set when a tile repaint invalidates the instanced scatter (ore mined out,
@@ -4340,6 +4426,7 @@ float groundOre;
       if(src.userData[key])g.userData[key]=map.get(src.userData[key]);
     if(src.userData.muzzle)g.userData.muzzle=src.userData.muzzle.clone();
     if(src.userData.legs)g.userData.legs=true;
+    if(src.userData.oreDims)g.userData.oreDims=src.userData.oreDims;
     if(src.userData.spin)g.userData.spin=src.userData.spin.map(e=>({o:map.get(e.o),rate:e.rate}));
     if(src.userData.blink)g.userData.blink=src.userData.blink.map(e=>({o:map.get(e.o),phase:e.phase}));
     if(src.userData.stacks)g.userData.stacks=src.userData.stacks;   // immutable, shared
@@ -4484,8 +4571,9 @@ float groundOre;
       if(v.userData.ore){
         const f=Math.max(0,Math.min(1,(u.cargo||0)/500));
         v.userData.ore.visible=f>0.02;
-        v.userData.ore.scale.set(22,7*f,14);          // 7 is the bin's full depth
-        v.userData.ore.position.y=11+3.5*f;
+        const od=v.userData.oreDims;
+        v.userData.ore.scale.set(od.w,od.h*f,od.d);
+        v.userData.ore.position.y=od.y+od.h*f/2;
       }
       if(v.userData.legs){
         /* Infantry march: a bob and a lean, driven by the same phase the 2D
