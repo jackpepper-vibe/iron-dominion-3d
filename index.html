@@ -764,17 +764,53 @@ function scarpF(v){        // 1 at the base of a scarp wall, 0 on the benches
   const u=Math.min(2.19,(v-0.48)/0.52*2.2), f=u-Math.min(2,u|0);
   return f<0.35?1-f/0.35:0;
 }
+/* Dry-soil weight at a world pixel: the broad bare patches the macro ramp
+   paints brown, which the ground shader also uses to swap grass detail for
+   soil detail. One function so the two can never disagree. */
+function soilAt(ax,ay){ return Math.max(0,Math.min(1,(0.40-sampleF(MF,ax,ay))/0.10)); }
+/* ---- ground splat ----
+   Which detail material the shader lays over the macro colour, at four texels
+   a tile: R soil, G wet mud, B road, A woodland floor. Softened with a small
+   blur and then broken up by noise in the shader, so none of them shows the
+   tile grid they were painted from. Rock is not in it — the shader derives
+   rock from the real slope and height of the mesh, which is exact where a
+   painted mask would only approximate. */
+const SPLAT_PER_TILE=4;
+const splatCan=mkCan(MAPW*SPLAT_PER_TILE,MAPH*SPLAT_PER_TILE);
+const sctx=splatCan.getContext('2d');
+function paintSplat(){
+  const W=splatCan.width, H=splatCan.height, img=sctx.createImageData(W,H), d=img.data;
+  const step=TILE/SPLAT_PER_TILE;
+  for(let sy=0;sy<H;sy++)for(let sx=0;sx<W;sx++){
+    const ax=(sx+0.5)*step, ay=(sy+0.5)*step, t=terrain[idx(sx/SPLAT_PER_TILE|0,sy/SPLAT_PER_TILE|0)];
+    const e=EF?sampleF(EF,ax,ay):0;
+    /* soil: the dry patches, plus the gravel apron of foothills and boulders */
+    const talus=Math.max(0,Math.min(1,(e-0.20)/0.12))*0.7;
+    const soil=Math.max(soilAt(ax,ay),talus,t===T_ROCK?0.8:0);
+    const k=(sy*W+sx)*4;
+    d[k]=soil*255; d[k+1]=t===T_MUD?255:0; d[k+2]=t===T_ROAD?255:0; d[k+3]=t===T_TREE?255:0;
+  }
+  /* putImageData would premultiply a zero alpha away, so the woodland channel
+     is written through a scratch canvas and composited opaque. */
+  const tmp=mkCan(W,H), tc=tmp.getContext('2d');
+  tc.putImageData(img,0,0);
+  sctx.clearRect(0,0,W,H);
+  sctx.filter='blur(1.2px)'; sctx.drawImage(tmp,0,0); sctx.filter='none';
+}
 function paintGroundTile(tx,ty){
   const img=tctx.createImageData(TILE,TILE), d=img.data;
   let i=0;
   for(let py=0;py<TILE;py++)for(let px=0;px<TILE;px++){
     const ax=tx*TILE+px, ay=ty*TILE+py;
     const n=sampleF(NF,ax,ay), m=sampleF(MF,ax,ay);
-    let grain=(hash2(ax,ay)-0.5)*14;
-    let r=40+n*36, g=52+n*38, b=30+n*20;
-    const da=Math.max(0,Math.min(1,(0.40-m)/0.10));
+    /* Broad colour only. Everything finer than a few pixels — blades, grit,
+       rock grain — is the ground shader's detail layer, which is sharp at any
+       zoom and projects onto cliff walls without smearing. Painting it here
+       as well is what made the old ground read as blotchy stamps. */
+    let r=60+n*32, g=86+n*32, b=42+n*16;
+    const da=soilAt(ax,ay);
     if(da>0){
-      const dr=95+n*26, dg=78+n*22, db=54+n*14;
+      const dr=128+n*26, dg=104+n*22, db=70+n*14;
       r+=(dr-r)*da; g+=(dg-g)*da; b+=(db-b)*da;
     }
     /* Mountain material ramp. This is pure albedo now — the terrain is real
@@ -793,24 +829,19 @@ function paintGroundTile(tx,ty){
       const warm=Math.max(0,1-Math.max(0,e0-0.48)*3.2);
       const rockR=78+n*52+warm*6, rockG=82+n*52+warm*9, rockB=94+n*50-warm*14;
       r+=(rockR-r)*tt; g+=(rockG-g)*tt; b+=(rockB-b)*tt;
-      /* broken rock faces: mottling grows with steepness so flats stay clean */
-      const mot=1+(fbm(ax*0.05+83,ay*0.05+29)-0.5)*(0.24+0.62*slope)*tt;
+      /* broken rock faces: broad mottling that grows with steepness */
+      const mot=1+(fbm(ax*0.02+83,ay*0.02+29)-0.5)*(0.2+0.4*slope)*tt;
       r*=mot; g*=mot; b*=mot;
-      grain*=1+tt*0.9;                       // rock is grittier than turf
       if(e0>0.90){                           // snow only on the very summits
         const s=Math.min(1,(e0-0.90)/0.08)*0.85;
         r+=(234-r)*s; g+=(238-g)*s; b+=(247-b)*s;
       }
-      /* scarp walls: striated cliff bands between the benches */
-      const cw=scarpF(e0);
-      if(cw>0){
-        const st=0.82+0.18*Math.sin(ay*1.05+n*5.2);         // bedding lines
-        const cr=0.65+0.35*hash2(ax>>1,ay>>1);              // ragged edge
-        const k2=0.38*cw*cr;
-        r*=(1-k2)*st; g*=(1-k2)*st; b*=(1-k2)*(st*0.98+0.02);
-      }
+      /* scarp walls sit a shade darker than the benches; their bedding and
+         cracks come from the triplanar rock detail, not from this map */
+      const k2=0.22*scarpF(e0);
+      r*=1-k2; g*=1-k2; b*=1-k2;
     }
-    d[i++]=r+grain; d[i++]=g+grain; d[i++]=b+grain*0.8; d[i++]=255;
+    d[i++]=r; d[i++]=g; d[i++]=b; d[i++]=255;
   }
   tctx.putImageData(img,tx*TILE,ty*TILE);
 }
@@ -836,31 +867,11 @@ function drawTile(tx,ty){
   tctx.save();
   tctx.beginPath();tctx.rect(x,y,TILE,TILE);tctx.clip();
   if(t===T_OPEN){
-    const fe=EF?sampleF(EF,x+16,y+16):0;   // grass tufts stop where turf gives way to talus
-    if(rng()<0.5&&fe<0.33){
-      const n=1+(rng()*3|0);
-      for(let i=0;i<n;i++){
-        const gx=x+4+rng()*24, gy=y+6+rng()*22;
-        tctx.strokeStyle='rgba(28,42,18,0.55)';tctx.lineWidth=1;
-        tctx.beginPath();
-        tctx.moveTo(gx,gy);tctx.lineTo(gx-2,gy-3-rng()*3);
-        tctx.moveTo(gx,gy);tctx.lineTo(gx+2,gy-3-rng()*3);
-        tctx.stroke();
-        tctx.strokeStyle='rgba(118,138,72,0.6)';
-        tctx.beginPath();tctx.moveTo(gx,gy);tctx.lineTo(gx+0.5,gy-4.5);tctx.stroke();
-      }
-    }
-    if(rng()<(fe>0.30?0.45:0.12)){   // loose stones thicken on the foothill aprons
-      const sx=x+6+rng()*20, sy=y+6+rng()*20, ss=1.5+rng()*2;
-      tctx.fillStyle='rgba(0,0,0,0.30)';tctx.beginPath();tctx.arc(sx+0.8,sy+1,ss,0,6.28);tctx.fill();
-      tctx.fillStyle='rgba(128,128,122,0.8)';tctx.beginPath();tctx.arc(sx,sy,ss,0,6.28);tctx.fill();
-      tctx.fillStyle='rgba(255,255,255,0.25)';tctx.beginPath();tctx.arc(sx-ss*0.3,sy-ss*0.3,ss*0.4,0,6.28);tctx.fill();
-    }
+    /* open turf is entirely the macro ramp plus the shader's grass detail */
   } else if(t===T_ROCK){
     /* The boulders themselves are instanced geometry now (see SCATTER); all the
        ground layer owes them is the gritty apron of shattered stone they sit in,
        so the mesh never looks parked on clean turf. */
-    tctx.fillStyle='rgba(66,66,62,0.30)';tctx.fillRect(x,y,TILE,TILE);
     for(let i=0;i<9;i++){
       const rx=x+rng()*TILE, ry=y+rng()*TILE, rs=0.8+rng()*2.2;
       tctx.fillStyle=rng()<0.5?'rgba(122,122,116,0.55)':'rgba(46,48,52,0.5)';
@@ -880,7 +891,6 @@ function drawTile(tx,ty){
        litter and root shade that a canopy actually leaves behind, which is
        also what stops the woodland floor reading as open field once the
        trunks are hidden by shroud. */
-    tctx.fillStyle='rgba(26,38,20,0.42)';tctx.fillRect(x,y,TILE,TILE);
     for(let i=0;i<7;i++){
       const lx=x+rng()*TILE, ly=y+rng()*TILE, lr=2+rng()*4;
       tctx.fillStyle=rng()<0.5?'rgba(44,58,30,0.5)':'rgba(62,52,32,0.38)';
@@ -895,36 +905,17 @@ function drawTile(tx,ty){
       tctx.strokeStyle='rgba(122,142,80,0.5)';tctx.lineWidth=1;
       tctx.beginPath();tctx.moveTo(bx,by);tctx.lineTo(bx+(rng()-0.5)*4,by-r-2);tctx.stroke();
     }
-  } else if(t===T_MUD){
-    tctx.fillStyle='rgba(58,50,32,0.55)';tctx.fillRect(x,y,TILE,TILE);
-    for(let i=0;i<4;i++){
-      const px2=x+rng()*TILE, py2=y+rng()*TILE, r=3+rng()*6;
-      tctx.fillStyle='rgba(38,32,20,0.45)';
-      tctx.beginPath();tctx.ellipse(px2,py2,r,r*0.55,rng()*3,0,6.28);tctx.fill();
-    }
-    tctx.fillStyle='rgba(150,150,120,0.10)';
-    tctx.beginPath();tctx.ellipse(x+12,y+14,5,2.5,0.4,0,6.28);tctx.fill();
-  } else if(t===T_ROAD){
-    tctx.fillStyle='rgba(74,70,56,0.80)';tctx.fillRect(x,y,TILE,TILE);
-    for(let i=0;i<10;i++){
-      const px2=x+rng()*TILE, py2=y+rng()*TILE;
-      tctx.fillStyle=rng()<0.5?'rgba(96,92,76,0.7)':'rgba(52,48,38,0.7)';
-      tctx.fillRect(px2,py2,1.5+rng()*2,1.5+rng()*2);
-    }
-    tctx.strokeStyle='rgba(40,36,28,0.35)';tctx.lineWidth=1;
-    tctx.beginPath();tctx.moveTo(x,y+9);tctx.lineTo(x+TILE,y+9);
-    tctx.moveTo(x,y+23);tctx.lineTo(x+TILE,y+23);tctx.stroke();
+  } else if(t===T_MUD||t===T_ROAD){
+    /* colour and grain come from the splat in the ground shader */
   } else if(t===T_ORE){
+    /* Crystals are instanced geometry, and the seam's glow is the ground
+       shader sampling a filtered ore map — continuous across the field, so it
+       has no tile edges. The albedo only keeps the dark spoil the crystals
+       grow out of. Kept inside the tile: it is clipped to it. */
     const rich=Math.min(1,oreAmt[idx(tx,ty)]/800);
-    const gl=tctx.createRadialGradient(x+16,y+16,2,x+16,y+16,17);
-    gl.addColorStop(0,'rgba(79,214,176,'+(0.18+rich*0.16)+')');gl.addColorStop(1,'rgba(79,214,176,0)');
-    tctx.fillStyle=gl;tctx.fillRect(x,y,TILE,TILE);
-    /* Crystals are instanced geometry now. The ground keeps the bloom of
-       tinted spoil around the seam, which is what makes an ore field readable
-       from a high camera before the individual spires resolve. */
-    for(let i=0;i<5;i++){
-      const cx=x+rng()*TILE, cy=y+rng()*TILE, cr=3+rng()*7;
-      tctx.fillStyle='rgba(46,120,98,'+(0.10+rich*0.20)+')';
+    for(let i=0;i<4;i++){
+      const cx=x+7+rng()*18, cy=y+7+rng()*18, cr=3+rng()*4;
+      tctx.fillStyle='rgba(34,52,40,'+(0.16+rich*0.16)+')';
       tctx.beginPath();tctx.ellipse(cx,cy,cr,cr*0.7,rng()*3,0,6.28);tctx.fill();
     }
   }
@@ -936,6 +927,7 @@ function renderTerrainAll(){
   buildElevation();
   bulkPaint=true;
   for(let ty=0;ty<MAPH;ty++)for(let tx=0;tx<MAPW;tx++)drawTile(tx,ty);
+  paintSplat();
   bulkPaint=false;
   /* The heightfield, the instanced scatter and every ground texture are all
      derived from what was just painted, so they are rebuilt as one step. */
@@ -3097,6 +3089,97 @@ function stripe(g,w,d,hex,x,y,z){
   g.add(m); return m;
 }
 
+/* ---- baked scatter models ----
+   Trees, boulders and ore crystals are drawn by the thousand, so each is one
+   geometry with per-vertex colour — trunk brown and needle green in a single
+   draw — instanced across the map with a per-instance tint for variety.
+   `bake` flattens a parts list into that one geometry. */
+function bake(parts){
+  let n=0;
+  const geos=parts.map(p=>{
+    const g=(p.geo.index?p.geo.toNonIndexed():p.geo.clone());
+    if(p.m)g.applyMatrix4(p.m);
+    n+=g.attributes.position.count; return {g,c:col(p.hex)};
+  });
+  const pos=new Float32Array(n*3), nor=new Float32Array(n*3), clr=new Float32Array(n*3);
+  let o=0;
+  for(const {g,c} of geos){
+    g.computeVertexNormals();
+    pos.set(g.attributes.position.array,o*3); nor.set(g.attributes.normal.array,o*3);
+    for(let i=0;i<g.attributes.position.count;i++){ clr[(o+i)*3]=c.r; clr[(o+i)*3+1]=c.g; clr[(o+i)*3+2]=c.b; }
+    o+=g.attributes.position.count; g.dispose();
+  }
+  const out=new THREE.BufferGeometry();
+  out.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  out.setAttribute('normal',new THREE.BufferAttribute(nor,3));
+  out.setAttribute('color',new THREE.BufferAttribute(clr,3));
+  out.computeBoundingSphere();
+  return out;
+}
+const mtx=(x,y,z,sx,sy,sz,rx,ry,rz)=>new THREE.Matrix4().compose(
+  new THREE.Vector3(x,y,z),new THREE.Quaternion().setFromEuler(new THREE.Euler(rx||0,ry||0,rz||0)),
+  new THREE.Vector3(sx,sy,sz));
+/* Lumpy boulder: an icosphere pushed about by seeded noise, its base pressed
+   flat so it sits on the ground instead of balancing on a point. */
+function rockGeo(seed){
+  const g=new THREE.IcosahedronGeometry(0.5,1), p=g.attributes.position, rng=mulberry(seed);
+  const bumps=[0,1,2,3].map(()=>[rng()*2-1,rng()*2-1,rng()*2-1,0.12+rng()*0.18]);
+  const v=new THREE.Vector3();
+  for(let i=0;i<p.count;i++){
+    v.fromBufferAttribute(p,i); const d=v.clone().normalize();
+    let k=1+(hash2((v.x*97+seed)|0,(v.z*89+v.y*53)|0)-0.5)*0.22;
+    for(const [bx,by,bz,a] of bumps)k+=Math.max(0,d.x*bx+d.y*by+d.z*bz)*a;
+    v.multiplyScalar(k); if(v.y<-0.18)v.y=-0.18;
+    p.setXYZ(i,v.x,v.y,v.z);
+  }
+  return g;
+}
+/* One faceted crystal: a hexagonal shaft with a pointed cap. */
+function crystalParts(list,x,z,r,h,lean,yaw,hex){
+  const shaft=new THREE.CylinderGeometry(r,r*0.82,h,6,1), cap=new THREE.ConeGeometry(r,r*2.2,6,1);
+  /* tip away from the cluster's heart: rotate about the horizontal axis
+     perpendicular to the direction the crystal stands in */
+  const q=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(Math.sin(yaw),0,-Math.cos(yaw)),lean);
+  const up=new THREE.Vector3(0,1,0).applyQuaternion(q);
+  const base=new THREE.Vector3(x,0,z);
+  list.push({geo:shaft,hex,m:new THREE.Matrix4().compose(base.clone().addScaledVector(up,h/2),q,new THREE.Vector3(1,1,1))});
+  list.push({geo:cap,hex,m:new THREE.Matrix4().compose(base.clone().addScaledVector(up,h+r*1.1),q,new THREE.Vector3(1,1,1))});
+}
+const SCATTER_MODELS={
+  pine(seed){
+    const rng=mulberry(seed), parts=[];
+    parts.push({geo:new THREE.CylinderGeometry(0.09,0.14,1,6),hex:'#5a4330',m:mtx(0,0.3,0,1,0.6,1)});
+    const greens=['#2f5a2c','#386634','#427138'];
+    for(let t=0;t<3;t++){
+      const w=0.5-t*0.12, y=0.28+t*0.22;
+      parts.push({geo:new THREE.ConeGeometry(w,0.46,7),hex:greens[t],m:mtx(0,y+0.23,0,1,1,1,0,rng()*6.28,0)});
+    }
+    return bake(parts);
+  },
+  broadleaf(seed){
+    const rng=mulberry(seed), parts=[];
+    parts.push({geo:new THREE.CylinderGeometry(0.07,0.11,1,6),hex:'#5d4632',m:mtx(0,0.25,0,1,0.5,1)});
+    const greens=['#3d6a2e','#4a7a34','#35602a','#558438'];
+    for(let i=0;i<4;i++){
+      const a=i/4*6.28+rng(), d=i?0.18:0, s=0.36+rng()*0.14;
+      parts.push({geo:new THREE.IcosahedronGeometry(0.5,1),hex:greens[i],
+        m:mtx(Math.cos(a)*d,0.62+(i?0:0.12)+rng()*0.06,Math.sin(a)*d,s*1.15,s,s*1.15,rng(),rng(),0)});
+    }
+    return bake(parts);
+  },
+  boulder(seed){ return bake([{geo:rockGeo(seed),hex:'#77736a'}]); },
+  crystals(seed){
+    const rng=mulberry(seed), parts=[], hues=['#35d69a','#4fe0ac','#2cbf88'];
+    /* chunky and mostly upright: a crystal outcrop, not a tuft */
+    const n=4+(rng()*3|0);
+    for(let i=0;i<n;i++){
+      const a=rng()*6.28, d=i?0.14+rng()*0.16:0, h=i?0.32+rng()*0.34:0.75+rng()*0.2;
+      crystalParts(parts,Math.cos(a)*d,Math.sin(a)*d,i?0.10+rng()*0.05:0.15,h,(i?0.15+rng()*0.3:0.03),a,hues[i%3]);
+    }
+    return bake(parts);
+  },
+};
+
 /* ---- structures ----
    Authored to the real footprint (w*TILE by h*TILE), origin at the footprint
    centre, deck at y=0. `tur` marks the child the sim swings with b.turAngle;
@@ -3460,6 +3543,115 @@ function infantry(g,trim,weapon){
    that clears twenty trees still costs one rebuild. */
 let scatterDirty=false;
 
+/* ---- ground detail textures ----
+   Tileable close-up texture for the three ground materials, generated once at
+   start-up so there is nothing to download. They are *multipliers* centred on
+   mid-grey: the ground shader does macro * detail * 2, so the painted macro
+   colour decides what a place looks like from altitude and these only add
+   the grain you see when you zoom in. Stored as data (no colour space) for
+   exactly that reason — they are ratios, not colours.
+
+   Periodic value noise keeps every octave seamless; strokes and pebbles are
+   drawn at all nine wrap offsets so nothing is cut at the tile edge. */
+const DETAIL_PX=512;
+function periodicNoise(period,seed){
+  const h=(a,b)=>hash2(((a%period)+period)%period+seed*1013,((b%period)+period)%period+seed*7919);
+  return (x,y)=>{
+    const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
+    const u=xf*xf*(3-2*xf), v=yf*yf*(3-2*yf);
+    const a=h(xi,yi), b=h(xi+1,yi), c=h(xi,yi+1), d=h(xi+1,yi+1);
+    return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v;
+  };
+}
+/* fbm over [0,1)^2 that wraps: octave o has period base<<o cells. */
+function tileFbm(base,octaves,seed){
+  const oct=[];
+  for(let o=0;o<octaves;o++)oct.push({p:base<<o,n:periodicNoise(base<<o,seed+o*17),a:Math.pow(0.52,o)});
+  const norm=oct.reduce((s,o)=>s+o.a,0);
+  return (u,v)=>{ let s=0; for(const o of oct)s+=o.n(u*o.p,v*o.p)*o.a; return s/norm; };
+}
+function detailCanvas(paint){
+  const c=mkCan(DETAIL_PX,DETAIL_PX), x=c.getContext('2d');
+  paint(x,DETAIL_PX);
+  return c;
+}
+/* Draw fn(ctx) at every wrap offset so marks crossing an edge continue on the other side. */
+function wrapDraw(x,S,fn){
+  for(const ox of [-S,0,S])for(const oy of [-S,0,S]){ x.save(); x.translate(ox,oy); fn(x); x.restore(); }
+}
+function fillField(x,S,f){
+  const img=x.createImageData(S,S), d=img.data;
+  for(let py=0;py<S;py++)for(let px=0;px<S;px++){
+    const [r,g,b]=f(px/S,py/S), k=(py*S+px)*4;
+    d[k]=r; d[k+1]=g; d[k+2]=b; d[k+3]=255;
+  }
+  x.putImageData(img,0,0);
+}
+const DETAIL_PAINTERS={
+  /* Turf: a mottled base, then thousands of short blades — light ones leaning
+     yellow, dark ones leaning blue — which is what grass is from above. */
+  grass(x,S){
+    const f=tileFbm(4,5,11), g=tileFbm(16,3,23);
+    fillField(x,S,(u,v)=>{ const n=f(u,v), m=g(u,v); const k=106+(n-0.5)*70+(m-0.5)*30;
+      return [k+(n-0.5)*16, k+4, k-10-(n-0.5)*10]; });
+    const rng=mulberry(4242);
+    for(let i=0;i<9000;i++){
+      const px=rng()*S, py=rng()*S, a=rng()*6.283, l=3+rng()*6, light=rng()<0.45;
+      const s=light?150+rng()*50:50+rng()*30;
+      x.strokeStyle=light?`rgba(${s+10},${s+8},${s-40},0.55)`:`rgba(${s-6},${s},${s+6},0.5)`;
+      x.lineWidth=0.9+rng()*0.8;
+      wrapDraw(x,S,c=>{ c.beginPath(); c.moveTo(px,py); c.lineTo(px+Math.cos(a)*l,py+Math.sin(a)*l); c.stroke(); });
+    }
+  },
+  /* Soil: fine grit, scattered pebbles with a lit top and a cast shadow, and a
+     few dry cracks. */
+  soil(x,S){
+    const f=tileFbm(8,5,31), g=tileFbm(64,2,37);
+    fillField(x,S,(u,v)=>{ const k=122+(f(u,v)-0.5)*60+(g(u,v)-0.5)*40; return [k+4,k,k-6]; });
+    const rng=mulberry(777);
+    x.lineWidth=1;
+    for(let i=0;i<60;i++){
+      let px=rng()*S, py=rng()*S, a=rng()*6.283;
+      x.strokeStyle='rgba(40,34,26,0.35)';
+      const pts=[[px,py]];
+      for(let k=0;k<6;k++){ a+=(rng()-0.5)*1.4; px+=Math.cos(a)*(5+rng()*9); py+=Math.sin(a)*(5+rng()*9); pts.push([px,py]); }
+      wrapDraw(x,S,c=>{ c.beginPath(); c.moveTo(...pts[0]); for(const p of pts)c.lineTo(...p); c.stroke(); });
+    }
+    for(let i=0;i<1400;i++){
+      const px=rng()*S, py=rng()*S, r=0.8+rng()*rng()*5, t=150+rng()*70;
+      wrapDraw(x,S,c=>{
+        c.fillStyle='rgba(20,16,12,0.4)'; c.beginPath(); c.ellipse(px+r*0.35,py+r*0.4,r,r*0.8,0,0,6.283); c.fill();
+        c.fillStyle=`rgb(${t},${t-6},${t-16})`; c.beginPath(); c.ellipse(px,py,r,r*0.8,rng()*3,0,6.283); c.fill();
+      });
+    }
+  },
+  /* Rock: sampled triplanar, so +v is up on a cliff wall. Bedding bands run
+     horizontally and are warped by noise; cracks and ridged noise break them. */
+  rock(x,S){
+    const f=tileFbm(4,6,51), w=tileFbm(2,3,57), r=tileFbm(8,4,61);
+    fillField(x,S,(u,v)=>{
+      const warp=(w(u,v)-0.5)*0.35;
+      /* bedding: a few bands of uneven thickness, not a regular contour ramp */
+      const band=Math.pow(0.5+0.5*Math.sin((v+warp)*6.283*5+Math.sin((v+warp*2)*6.283*3)*1.6),3);
+      const ridge=1-Math.abs(2*r(u,v)-1);
+      const k=116+(f(u,v)-0.5)*100+(band-0.3)*26+(ridge-0.6)*44;
+      return [k+2,k,k-3];
+    });
+    const rng=mulberry(9001);
+    for(let i=0;i<140;i++){
+      let px=rng()*S, py=rng()*S, a=(rng()<0.6?0:1.57)+(rng()-0.5)*0.7;
+      const pts=[[px,py]];
+      for(let k=0;k<5;k++){ a+=(rng()-0.5)*0.9; const l=6+rng()*16; px+=Math.cos(a)*l; py+=Math.sin(a)*l; pts.push([px,py]); }
+      wrapDraw(x,S,c=>{
+        c.strokeStyle='rgba(30,30,32,0.5)'; c.lineWidth=1.4;
+        c.beginPath(); c.moveTo(...pts[0]); for(const p of pts)c.lineTo(...p); c.stroke();
+        c.strokeStyle='rgba(200,200,196,0.25)'; c.lineWidth=0.8;   // lit lip of the crack
+        c.beginPath(); c.moveTo(pts[0][0],pts[0][1]-1); for(const p of pts)c.lineTo(p[0],p[1]-1); c.stroke();
+      });
+    }
+  },
+};
+
 const R3D=(function(){
   /* ---- constants ----
      HSCALE is the only number that decides how mountainous the battlefield
@@ -3478,11 +3670,16 @@ const R3D=(function(){
      Skylark changes the light per sector; the same idea, re-graded to Iron
      Dominion's palette. Every campaign mission picks one, so a long campaign
      does not play out under one unchanging sun. */
+  /* Graded as clear daylight, which is what a Command & Conquer battlefield
+     is: a hard sun, a blue sky filling the shadows, and almost no haze at
+     play distance — the fog only exists to soften the far horizon at full
+     zoom-out. The four theatres vary the hour and the weather, never the
+     legibility. */
   const THEMES=[
-    {name:'ember dusk', sky:0x40372c, hz:0x6b563c, sun:0xffd6a0, sunI:1.25, hemiS:0x8a7a63, hemiG:0x35301f, hemiI:0.55, amb:0x2a2419, ambI:0.5, fogN:700, fogF:2900, exp:1.02, sunDir:[0.62,0.55,-0.56]},
-    {name:'cold front', sky:0x333c46, hz:0x59626c, sun:0xdfe8f5, sunI:1.05, hemiS:0x7f8b9b, hemiG:0x2e3228, hemiI:0.62, amb:0x232a33, ambI:0.55, fogN:620, fogF:2500, exp:1.00, sunDir:[-0.5,0.62,-0.6]},
-    {name:'ash haze',   sky:0x3a352e, hz:0x6a5f4e, sun:0xffc98a, sunI:0.95, hemiS:0x7d7466, hemiG:0x322c1e, hemiI:0.60, amb:0x2b2721, ambI:0.6, fogN:420, fogF:1900, exp:0.98, sunDir:[0.35,0.7,-0.62]},
-    {name:'high noon',  sky:0x4a5360, hz:0x8b8a78, sun:0xfff3d8, sunI:1.35, hemiS:0x9aa6b4, hemiG:0x3a3a26, hemiI:0.58, amb:0x2e3138, ambI:0.45, fogN:900, fogF:3200, exp:1.05, sunDir:[0.2,0.86,-0.47]},
+    {name:'temperate day', sky:0x6d93c0, hz:0xb4c3c9, sun:0xfff0d8, sunI:1.85, hemiS:0xb8cde6, hemiG:0x4f4a36, hemiI:0.55, amb:0x202226, ambI:0.20, fogN:1700, fogF:5400, exp:1.00, sunDir:[0.55,0.72,-0.42]},
+    {name:'cold front',    sky:0x7d8a98, hz:0xa7b0b8, sun:0xe6eef8, sunI:1.45, hemiS:0xa9b6c6, hemiG:0x3e4034, hemiI:0.72, amb:0x24282e, ambI:0.25, fogN:1300, fogF:4600, exp:1.00, sunDir:[-0.5,0.66,-0.56]},
+    {name:'dry season',    sky:0x8aa0b4, hz:0xd2c4a4, sun:0xffe1b0, sunI:1.85, hemiS:0xc8c0a8, hemiG:0x5a4a30, hemiI:0.50, amb:0x2a2620, ambI:0.22, fogN:1300, fogF:4800, exp:1.00, sunDir:[0.35,0.62,-0.70]},
+    {name:'high noon',     sky:0x5d8cc4, hz:0xbac8d2, sun:0xfff6e6, sunI:2.05, hemiS:0xbad2ea, hemiG:0x50503a, hemiI:0.50, amb:0x202226, ambI:0.18, fogN:1900, fogF:5800, exp:1.00, sunDir:[0.22,0.88,-0.42]},
   ];
 
   /* ---- renderer ---- */
@@ -3558,16 +3755,91 @@ const R3D=(function(){
   SHROUD.uShroud.value=shroudTex;
   /* The ground takes the shared shroud patch like everything else, plus the
      scorch layer, which only it needs. */
+  /* ---- ground detail, splat and ore glow ----
+     The macro albedo (terraTex) says what a place is; these make it look like
+     that thing up close. Grass and soil detail are laid flat by world XZ at two
+     scales so the repeat never lines up; rock is triplanar, so a cliff wall
+     gets bedding and cracks running across it instead of a top-down texture
+     smeared down its face. Where each goes: soil/mud/road from the splat,
+     rock from the mesh's actual slope and height. */
+  function detailTex(name){
+    const t=new THREE.CanvasTexture(detailCanvas(DETAIL_PAINTERS[name]));
+    t.wrapS=t.wrapT=THREE.RepeatWrapping;
+    t.minFilter=THREE.LinearMipmapLinearFilter; t.magFilter=THREE.LinearFilter;
+    t.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+    t.colorSpace=THREE.NoColorSpace;   // ratios around mid-grey, not colours
+    return t;
+  }
+  const GROUND_TIME={value:0};   // drives the ore shimmer; advanced by render()
+  const DET={grass:detailTex('grass'), soil:detailTex('soil'), rock:detailTex('rock')};
+  const splatTex=groundTex(splatCan,true);
+  /* One texel per tile of ore richness, linearly filtered: a field glows as one
+     soft continuous patch and a mined-out tile fades rather than punching a
+     square hole. */
+  const oreData=new Uint8Array(MAPW*MAPH*4);
+  const oreTex=new THREE.DataTexture(oreData,MAPW,MAPH,THREE.RGBAFormat);
+  oreTex.magFilter=oreTex.minFilter=THREE.LinearFilter;
+  oreTex.wrapS=oreTex.wrapT=THREE.ClampToEdgeWrapping;
+  function refreshOre(tx,ty){
+    const put=k=>{ oreData[k*4]=terrain[k]===T_ORE?Math.min(255,60+oreAmt[k]/800*195):0; oreData[k*4+3]=255; };
+    if(tx===undefined){ for(let k=0;k<MAPW*MAPH;k++)put(k); }
+    else put(idx(tx,ty));
+    oreTex.needsUpdate=true;
+  }
   const groundMat=shroudify(new THREE.MeshPhongMaterial({map:terraTex,shininess:0,specular:0x000000}));
   const groundShroud=groundMat.onBeforeCompile;
   groundMat.onBeforeCompile=sh=>{
     groundShroud(sh);
-    sh.uniforms.uDecal={value:decalTex};
-    sh.fragmentShader='uniform sampler2D uDecal;\n'+sh.fragmentShader;
-    sh.fragmentShader=sh.fragmentShader.replace('#include <map_fragment>',
+    Object.assign(sh.uniforms,{
+      uDecal:{value:decalTex}, uSplat:{value:splatTex}, uOre:{value:oreTex},
+      uDetGrass:{value:DET.grass}, uDetSoil:{value:DET.soil}, uDetRock:{value:DET.rock},
+      uHScale:{value:HSCALE}, uOreGlow:{value:col('#2fe0a0')}, uTime:GROUND_TIME,
+    });
+    sh.vertexShader='varying vec3 vGW;\nvarying vec3 vGN;\n'+sh.vertexShader.replace('#include <fog_vertex>',
+      `#include <fog_vertex>
+       vGW = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
+       vGN = normalize( mat3( modelMatrix ) * objectNormal );`);
+    sh.fragmentShader=`uniform sampler2D uDecal, uSplat, uOre, uDetGrass, uDetSoil, uDetRock;
+uniform float uHScale, uTime, uInvWorld; uniform vec3 uOreGlow;
+varying vec3 vGW; varying vec3 vGN;
+vec3 rockTri( vec3 p, vec3 n, float s ){
+  vec3 w = pow( abs( n ), vec3( 4.0 ) ); w /= ( w.x + w.y + w.z );
+  return texture2D( uDetRock, p.zy * s ).rgb * w.x
+       + texture2D( uDetRock, p.xz * s ).rgb * w.y
+       + texture2D( uDetRock, p.xy * s ).rgb * w.z;
+}
+float groundOre;
+`+sh.fragmentShader.replace('#include <map_fragment>',
       `#include <map_fragment>
-       vec4 dcl = texture2D( uDecal, vMapUv );   // same UVs as the albedo, by construction
-       diffuseColor.rgb = mix( diffuseColor.rgb, dcl.rgb, dcl.a );`);
+       {
+         vec3 n = normalize( vGN );
+         vec4 sp = texture2D( uSplat, vMapUv );
+         float h = vGW.y / uHScale;
+         float rockW = clamp( max( smoothstep( 0.20, 0.46, 1.0 - n.y ),
+                                   smoothstep( 0.30, 0.50, h ) * 0.8 ), 0.0, 1.0 );
+         vec3 grass = mix( texture2D( uDetGrass, vGW.xz / 128.0 ).rgb,
+                           texture2D( uDetGrass, vGW.xz / 347.0 + 0.37 ).rgb, 0.35 );
+         vec3 soil = texture2D( uDetSoil, vGW.xz / 96.0 ).rgb;
+         /* break every splat edge with noise so no channel shows the grid */
+         float brk = texture2D( uDetRock, vGW.xz / 260.0 ).r - 0.45;
+         float wMud  = smoothstep( 0.30, 0.70, sp.g + brk * 0.8 );
+         float wRoad = smoothstep( 0.35, 0.65, sp.b + brk * 0.5 );
+         float wWood = smoothstep( 0.25, 0.75, sp.a + brk * 0.9 );
+         vec3 det = mix( grass, soil, clamp( sp.r + wMud + wRoad, 0.0, 1.0 ) );
+         det = mix( det, rockTri( vGW, n, 1.0 / 120.0 ), rockW );
+         diffuseColor.rgb *= det * 2.0;
+         diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.42, 0.40, 0.30 ), wWood * 0.75 );
+         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.075, 0.060, 0.035 ) * det * 2.0, wMud * 0.85 );
+         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.20, 0.17, 0.12 ) * det * 2.0, wRoad * 0.9 );
+         /* ore seams: dark spoil under a cold glow, broken up by the soil grain */
+         groundOre = texture2D( uOre, vGW.xz * uInvWorld ).r;
+         groundOre = smoothstep( 0.30, 0.8, groundOre ) * ( 0.55 + 0.9 * ( soil.g - 0.45 ) );
+         diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.03, 0.08, 0.06 ), groundOre * 0.45 );
+         vec4 dcl = texture2D( uDecal, vMapUv );
+         diffuseColor.rgb = mix( diffuseColor.rgb, dcl.rgb, dcl.a );
+       }`).replace('#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+       totalEmissiveRadiance += uOreGlow * groundOre * ( 0.15 + 0.04 * sin( uTime * 1.7 + vGW.x * 0.03 ) );`);
   };
 
   /* ---- backdrop ----
@@ -3628,24 +3900,21 @@ const R3D=(function(){
   const scatter=new THREE.Group(); scene.add(scatter);
   /* Crystal: shaded like everything else, with just enough emission to stay
      legible in the shadow of the massif it usually seams through. */
-  const ORE_MAT=shroudify(new THREE.MeshPhongMaterial({color:col('#2e8f70'),
-    emissive:col('#123f31'),specular:col('#9fe8cf'),shininess:60,flatShading:true}));
+  const ORE_MAT=shroudify(new THREE.MeshPhongMaterial({vertexColors:true,
+    emissive:col('#0b4a33'),specular:col('#d8fff0'),shininess:90,flatShading:true}));
+  /* Trees and boulders: colour lives in the vertices, tint in the instance. */
+  const SCATTER_MAT=shroudify(new THREE.MeshPhongMaterial({vertexColors:true,shininess:6,
+    specular:col('#101210'),flatShading:true}));
   function clearScatter(){
     /* Only the per-instance matrix buffers are ours to release — every geometry
        and material here is a shared constant that other meshes still use. */
     for(const c of scatter.children)c.dispose?.();
     scatter.clear();
   }
-  function inst(geo,hex,count,flat,glow){
-    const m=new THREE.InstancedMesh(geo,M(hex,flat,glow),count);
-    m.castShadow=true; m.receiveShadow=true;
-    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    scatter.add(m); return m;
-  }
   function rebuildScatter(){
     clearScatter();
     const tmp=new THREE.Object3D();
-    const pine=[], trunk=[], leaf=[], rock=[], ore=[];
+    const pine=[], leaf=[], rock=[], ore=[];
     /* Scrub is deliberately not scattered. It covers better than half the map,
        and standing geometry on every scrub tile buried the battlefield in
        chest-high shrubbery you could not see units through — the ground
@@ -3659,24 +3928,23 @@ const R3D=(function(){
         for(let i=0;i<n;i++){
           const x=tx*TILE+6+rng()*20, z=ty*TILE+6+rng()*20, y=groundH(x,z);
           const s=0.85+rng()*0.55, con=rng()<0.66;
-          trunk.push([x,y,z,s,rng()*6.28]);
-          (con?pine:leaf).push([x,y,z,s,rng()*6.28]);
+          (con?pine:leaf).push([x,y,z,s,rng()*6.28,rng()]);
         }
       } else if(t===T_ROCK){
         const n=2+(rng()*3|0);
         for(let i=0;i<n;i++){
           const x=tx*TILE+5+rng()*22, z=ty*TILE+5+rng()*22, y=groundH(x,z);
-          rock.push([x,y,z,5+rng()*9,rng()*6.28,0.5+rng()*0.5]);
+          rock.push([x,y,z,5+rng()*9,rng()*6.28,0.5+rng()*0.5,rng()]);
         }
       } else {
-        /* Two or three spires a tile, not eight. Ore covers 250-300 tiles on a
-           typical map, and a spire per corner turned every seam into a mint
-           thicket that out-shouted the armour fighting over it. */
+        /* One or two crystal clusters a tile, sized by what is left in it —
+           a seam visibly shrinks as it is mined. Ore covers 250-300 tiles on a
+           typical map; any denser and it out-shouts the armour fighting over it. */
         const rich=Math.min(1,oreAmt[k]/800);
-        const n=2+Math.round(rich*2);
+        const n=1+(rng()<0.35+rich*0.4?1:0);
         for(let i=0;i<n;i++){
-          const x=tx*TILE+6+rng()*20, z=ty*TILE+6+rng()*20, y=groundH(x,z);
-          ore.push([x,y,z,(2.6+rng()*3)*(0.6+rich*0.5),rng()*6.28,(rng()-0.5)*0.45]);
+          const x=tx*TILE+8+rng()*16, z=ty*TILE+8+rng()*16, y=groundH(x,z);
+          ore.push([x,y,z,(9+rng()*7)*(0.55+rich*0.55),rng()*6.28,(rng()-0.5)*0.4,rng()]);
         }
       }
     }
@@ -3684,42 +3952,41 @@ const R3D=(function(){
       list.forEach((d,i)=>{ fn(tmp,d); tmp.updateMatrix(); mesh.setMatrixAt(i,tmp.matrix); });
       mesh.instanceMatrix.needsUpdate=true;
     };
-    if(trunk.length){
-      place(inst(G_CYL6,'#4a3c26',trunk.length,true),trunk,(o,[x,y,z,s,r])=>{
-        o.position.set(x,y+7*s,z); o.scale.set(2.6*s,14*s,2.6*s); o.rotation.set(0,r,0);
-      });
-    }
-    /* Timber is dark. Woodland is cover and a movement block, so it has to read
-       as a solid mass from above rather than as bright decoration competing
-       with the units for attention. */
-    if(pine.length){
-      place(inst(G_CONE,'#1e3a20',pine.length,true),pine,(o,[x,y,z,s,r])=>{
-        o.position.set(x,y+20*s,z); o.scale.set(13*s,32*s,13*s); o.rotation.set(0,r,0);
-      });
-    }
-    if(leaf.length){
-      place(inst(G_ICO,'#26401c',leaf.length,true),leaf,(o,[x,y,z,s,r])=>{
-        o.position.set(x,y+16*s,z); o.scale.set(17*s,15*s,17*s); o.rotation.set(0.3,r,0.2);
-      });
-    }
-    if(rock.length){
-      place(inst(G_ROCK,'#4e535b',rock.length,true),rock,(o,[x,y,z,s,r,sq])=>{
-        o.position.set(x,y+s*0.42,z); o.scale.set(s*2,s*1.5*sq+s*0.5,s*1.9); o.rotation.set(r*0.3,r,r*0.2);
-      });
-    }
-    if(ore.length){
-      /* Ore has to be findable at any zoom without being the brightest thing on
-         the field. Shaded crystal with a modest self-glow does both: it takes
-         the sun and the shroud like everything else, but never falls to black
-         in shadow the way plain rock does. */
-      const mesh=new THREE.InstancedMesh(G_CONE,ORE_MAT,ore.length);
-      mesh.castShadow=true; mesh.receiveShadow=true;
-      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      scatter.add(mesh);
-      place(mesh,ore,(o,[x,y,z,s,r,lean])=>{
-        o.position.set(x,y+s*1.2,z); o.scale.set(s*1.05,s*2.8,s*1.05); o.rotation.set(lean,r,lean*0.7);
-      });
-    }
+    /* Each list is split across a few model variants, and every instance gets
+       a small tint so no two trees or boulders are quite the same colour. */
+    const tint=new THREE.Color();
+    const spread=(key,list,mat,variants,fn,tintAmt)=>{
+      for(let v=0;v<variants;v++){
+        const mine=list.filter((_,i)=>i%variants===v);
+        if(!mine.length)continue;
+        const mesh=new THREE.InstancedMesh(scatterGeo(key,v),mat,mine.length);
+        mesh.castShadow=true; mesh.receiveShadow=true;
+        scatter.add(mesh);
+        place(mesh,mine,fn);
+        mine.forEach((d,i)=>{ const k=1+(d[d.length-1]-0.5)*tintAmt;
+          mesh.setColorAt(i,tint.setRGB(k,k*(1+(d[4]%0.1)-0.05),k)); });
+        mesh.instanceColor.needsUpdate=true;
+      }
+    };
+    spread('pine',pine,SCATTER_MAT,2,(o,[x,y,z,s,r])=>{
+      o.position.set(x,y-1,z); o.scale.set(24*s,30*s,24*s); o.rotation.set(0,r,0);
+    },0.22);
+    spread('broadleaf',leaf,SCATTER_MAT,2,(o,[x,y,z,s,r])=>{
+      o.position.set(x,y-1,z); o.scale.set(26*s,26*s,26*s); o.rotation.set(0,r,0);
+    },0.22);
+    spread('boulder',rock,SCATTER_MAT,3,(o,[x,y,z,s,r,sq])=>{
+      o.position.set(x,y+s*0.3,z); o.scale.set(s*2.2,s*(1.1+sq),s*2.0); o.rotation.set(0,r,0);
+    },0.28);
+    spread('crystals',ore,ORE_MAT,3,(o,[x,y,z,s,r,lean])=>{
+      o.position.set(x,y-0.5,z); o.scale.set(s,s*(1+Math.abs(lean)),s); o.rotation.set(0,r,0);
+    },0.2);
+  }
+  /* Scatter geometry is built once per variant and kept: every battle reuses it. */
+  const scatterGeoCache=new Map();
+  function scatterGeo(key,v){
+    const k=key+v;
+    if(!scatterGeoCache.has(k))scatterGeoCache.set(k,SCATTER_MODELS[key](v*7919+key.length*131));
+    return scatterGeoCache.get(k);
   }
 
   /* ---- entity views ----
@@ -4081,6 +4348,7 @@ const R3D=(function(){
       for(const [,v] of bView)entities.remove(v); bView.clear();
       for(const [,v] of uView)entities.remove(v); uView.clear();
       shroudTex.needsUpdate=true; decalTex.needsUpdate=true;
+      splatTex.needsUpdate=true; refreshOre();
     },
     /* One tile repainted mid-battle (ore mined out, timber burnt). */
     tileChanged(tx,ty){
@@ -4089,6 +4357,7 @@ const R3D=(function(){
       patchTex.needsUpdate=true;
       try{ renderer.copyTextureToTexture(patchTex,terraTex,null,new THREE.Vector2(tx*TILE,ty*TILE)); }
       catch(e){ terraTex.needsUpdate=true; }
+      refreshOre(tx,ty);
       scatterDirty=true;
     },
     fogChanged(){ shroudTex.needsUpdate=true; },
@@ -4138,6 +4407,7 @@ const R3D=(function(){
       return pts;
     },
     render(dt){
+      GROUND_TIME.value+=dt||0;
       placeCamera();
       syncBuildings(); syncUnits(dt); drawEffects();
       if(decalDirtyAt&&performance.now()-decalDirtyAt>200){

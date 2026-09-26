@@ -84,6 +84,14 @@ material with the same shroud sampled by world XZ. Any new material that appears
 in the scene must go through `M()` or `shroudify()` or it will glow through the
 black and leak the map layout.
 
+**Ground = macro + detail.** The 2D painter's `terraCan` is now *broad colour
+only*. Fine detail comes from the ground shader: tiling grass/soil detail by
+world XZ and triplanar rock picked by the mesh's real slope and height, all
+multipliers around mid-grey (`DETAIL_PAINTERS`, generated at start-up). Soil,
+mud, road and woodland floor come from `splatCan` (4 texels/tile, blurred, edges
+noise-broken in the shader); ore glow from a 72x72 filtered ore map. Never
+`fillRect` a whole tile in the painter again — it shows the grid as squares.
+
 ## Verification
 
 Screenshots and a smoke test. Do not describe a visual change as done by
@@ -94,7 +102,12 @@ npm run serve                   # http://localhost:5173/
 node scripts/shot.mjs           # mission 1, normal fog
 node scripts/shot.mjs 2 reveal  # mission 3, whole map explored
 node scripts/smoke.mjs          # picking, orders, marquee, placement, shroud, saves
+node scripts/look.mjs [--perf]  # REAL-GPU posed captures -> shots/look/, + ms/frame
 ```
+
+Judge graphics with `look.mjs` only: the other two render on SwiftShader,
+which is not what a player sees. Frame cost after the 2026-09-26 ground pass
+was 7-10 ms on the Iris Xe (was 6-8).
 
 `window.ID3` is the test hook — `mission(i, revealAll)`, `cam(x,y,dist)`,
 `look(tx,ty,dist)`, `find(type,dist)`, `spawn`, `build`, `step(n,dt)`,
