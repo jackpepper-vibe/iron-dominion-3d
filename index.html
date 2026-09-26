@@ -303,6 +303,7 @@
         &bull; <b>E</b> or the top-right button: toggle edge-of-screen scrolling (off by default)<br>
         &bull; Ctrl+1-5: assign group &nbsp;&bull; 1-5: recall group &nbsp;&bull; Right-click icon: cancel &amp; refund<br>
         &bull; Selected building: <b>R</b> repair &nbsp;&bull; <b>X</b> sell &nbsp;&bull; right-click ground sets a factory's rally point<br>
+        &bull; Engineers: right-click a structure to capture (at half strength or less), sabotage, or restore your own<br>
         &bull; Keep power (green bar) above demand or production slows and radar fails.
       </div>
       </div>
@@ -405,6 +406,8 @@ const UDEFS={
   trooper:  {name:'Rifle Trooper', cost:120,  hp:60,  dmg:7,  range:3.4, rof:0.55, speed:52, sight:6, build:5,  from:'barracks', r:7,  kind:'inf', tech:1},
   rocketeer:{name:'Rocket Squad',  cost:320,  hp:55,  dmg:26, range:4.6, rof:1.7,  speed:46, sight:6, build:8,  from:'barracks', r:7,  kind:'inf', tech:2},
   grenadier:{name:'Grenadier',     cost:260,  hp:70,  dmg:24, range:3.1, rof:1.5,  speed:47, sight:6, build:7,  from:'barracks', r:7,  kind:'inf', tech:4},
+  engineer: {name:'Combat Engineer',cost:500, hp:45,  dmg:0,  range:0,   rof:0,    speed:44, sight:5, build:8,  from:'barracks', r:7,  kind:'inf', tech:2,
+             desc:'Captures a damaged enemy structure, sabotages a sound one, or restores one of your own.'},
   buggy:    {name:'Scout Buggy',   cost:450,  hp:140, dmg:8,  range:3.6, rof:0.38, speed:112,sight:8, build:9,  from:'factory',  r:9,  kind:'veh', tech:3},
   tank:     {name:'Wolf Tank',     cost:800,  hp:320, dmg:32, range:4.4, rof:1.5,  speed:74, sight:6, build:14, from:'factory',  r:12, kind:'veh', tech:1},
   heavy:    {name:'Mammut Tank',   cost:1400, hp:560, dmg:48, range:4.8, rof:2.0,  speed:52, sight:6, build:22, from:'factory',  r:14, kind:'veh', tech:4},
@@ -414,7 +417,7 @@ const UDEFS={
 };
 const SIDEBAR_ITEMS={
   structure:['power','refinery','barracks','factory','guardtower','turret','bastion','helipad','sandbag','trench','hedgehog','techlab'],
-  infantry:['trooper','rocketeer','grenadier'],
+  infantry:['trooper','rocketeer','grenadier','engineer'],
   vehicle:['buggy','tank','heavy','gunship','artillery','harvester'],
 };
 const PLAYER=0, ENEMY=1;
@@ -1918,6 +1921,7 @@ function hasBuilding(owner,type){return buildings.some(b=>b.owner===owner&&b.typ
 
 /* ================= DAMAGE / DEATH ================= */
 function dealDamage(ent,dmg,attacker){
+  if(ent.cls==='u')dmg*=rankOf(ent).armor;
   ent.hp-=dmg; ent.flash=0.12;
   if(attacker&&attacker.owner===ENEMY&&ent.owner===PLAYER&&tick-lastAttackWarn>300){
     lastAttackWarn=tick; eva('Base under attack'); beep(180,0.25,'sawtooth');
@@ -1926,7 +1930,7 @@ function dealDamage(ent,dmg,attacker){
   if(ent.cls==='u'&&ent.owner!==undefined&&UDEFS[ent.type].dmg>0&&ent.order==='idle'&&attacker&&attacker.hp>0){
     ent.order='attack'; ent.target=attacker;
   }
-  if(ent.hp<=0)killEntity(ent);
+  if(ent.hp<=0){ awardKill(attacker,ent); killEntity(ent); }
 }
 function killEntity(ent){
   boom(ent.x,ent.y,ent.cls==='b'?26:12);
@@ -1960,6 +1964,82 @@ function boom(x,y,size){
   // camX/camY are the point the camera is looking at now, so proximity is radial
   if(Math.hypot(x-camX,y-camY)<R3D.dist*1.1)shake=Math.min(10,shake+size*0.18);
   beep(70+Math.random()*40,0.25,'sawtooth',0.16);
+}
+
+/* ================= VETERANCY =================
+   Units learn. Experience is the value of what a unit destroys, measured
+   against its own price, so a rifleman who kills a tank is promoted at once
+   and a Mammut has to earn it. Veterans hit harder, fire faster and shrug
+   off more; elites also patch themselves up in the field. */
+const RANKS=[
+  {name:'',        dmg:1.00, rof:1.00, armor:1.00, heal:0},
+  {name:'VETERAN', dmg:1.20, rof:0.90, armor:0.90, heal:0},
+  {name:'ELITE',   dmg:1.40, rof:0.80, armor:0.80, heal:0.015},
+];
+function rankOf(u){ return RANKS[u.rank||0]; }
+function rankThreshold(u,r){ const c=UDEFS[u.type].cost; return r===1?Math.max(300,c*1.5):Math.max(900,c*4); }
+function valueKilled(ent){ return ent.cls==='u'?UDEFS[ent.type].cost:valueOf(ent.type); }
+function awardKill(att,victim){
+  if(!att||att.cls!=='u'||att.hp<=0||!units.includes(att))return;
+  att.xp=(att.xp||0)+valueKilled(victim);
+  while((att.rank||0)<2&&att.xp>=rankThreshold(att,(att.rank||0)+1)){
+    att.rank=(att.rank||0)+1;
+    if(att.owner===PLAYER){
+      eva('Unit promoted'); beep(880,0.07,'square',0.06); setTimeout(()=>beep(1175,0.09,'square',0.06),80);
+      particles.push({x:att.x,y:att.y-8,vx:0,vy:-14,life:1.4,max:1.4,size:11,c:'#ffd76e',
+        txt:(att.rank===2?'\u2605\u2605 ':'\u2605 ')+RANKS[att.rank].name,kind:'text'});
+    }
+  }
+}
+function updateVeterans(dt){
+  for(const u of units){
+    const h=rankOf(u).heal;
+    if(h&&u.hp<u.maxhp)u.hp=Math.min(u.maxhp,u.hp+u.maxhp*h*dt);
+  }
+}
+
+/* ================= ENGINEERS =================
+   The Red Alert rule: an engineer that reaches an enemy structure captures
+   it outright if it is at half strength or worse, and otherwise sabotages it
+   for a third of its strength. Sent into one of your own damaged structures
+   it restores it completely. Either way the engineer is spent. Obstacles
+   (walls, trenches, hedgehogs) cannot be taken. */
+function capturable(b){ return !!b&&b.cls==='b'&&b.hp>0&&!BDEFS[b.type].barrier; }
+function orderCapture(u,b){
+  if(u.type!=='engineer'||!capturable(b))return false;
+  u.order='capture'; u.target=b; u.path=null; u.dest=[b.x,b.y];
+  return true;
+}
+function engineerAction(u,b){
+  if(b.owner===u.owner)return b.hp<b.maxhp?'REPAIR':null;
+  return b.hp<=b.maxhp*0.5?'CAPTURE':'SABOTAGE';
+}
+function transferBuilding(b,owner){
+  const from=b.owner;
+  b.owner=owner; b.target=null; b.repairing=false; b.rally=null; b.cool=0;
+  if(selectedBuilding===b&&owner!==PLAYER)selectedBuilding=null;
+  if(owner===PLAYER){eva(BDEFS[b.type].name+' captured');beep(760,0.1,'square',0.08);}
+  else if(from===PLAYER){eva(BDEFS[b.type].name+' captured by the enemy');beep(160,0.3,'sawtooth',0.1);}
+  checkVictory();
+}
+function engineerArrive(u,b){
+  const act=engineerAction(u,b);
+  if(act==='REPAIR'){ b.hp=b.maxhp; if(u.owner===PLAYER){eva('Structure restored');beep(660,0.08,'square',0.06);} }
+  else if(act==='CAPTURE')transferBuilding(b,u.owner);
+  else if(act==='SABOTAGE'){ dealDamage(b,b.maxhp/3,u); if(u.owner===PLAYER)eva('Structure sabotaged'); }
+  /* the engineer goes inside and does not come back out */
+  units.splice(units.indexOf(u),1);
+  selection=selection.filter(s=>s!==u);
+}
+function updateEngineer(u,dt,d){
+  const t=u.target;
+  if(!t||t.hp<=0||!buildings.includes(t)||!engineerAction(u,t)){u.order='idle';u.target=null;u.path=null;return;}
+  if(distTo(u,t)<TILE*0.55){engineerArrive(u,t);return;}
+  if(!u.path||tick%20===u.id%20){u.path=findPath(u.x/TILE|0,u.y/TILE|0,t.x/TILE|0,t.y/TILE|0);u.pi=0;}
+  if(u.path&&moveAlongPath(u,dt,d.speed)){
+    /* the path ends beside the footprint; step the last few units to the wall */
+    const a=Math.atan2(t.y-u.y,t.x-u.x); u.x+=Math.cos(a)*d.speed*dt; u.y+=Math.sin(a)*d.speed*dt; u.path=null;
+  }
 }
 
 /* ================= SELL / REPAIR / RALLY =================
@@ -2153,6 +2233,7 @@ function updateUnit(u,dt){
   u.turAngle+=Math.max(-5*dt,Math.min(5*dt,tda));
   if(u.type==='harvester'){updateHarvester(u,dt);separation(u);return;}
   if(d.fly){updateFlyer(u,dt,d);return;}
+  if(u.order==='capture'){updateEngineer(u,dt,d);if(units.includes(u))separation(u);return;}
   if(u.order==='move'){
     if(moveAlongPath(u,dt,d.speed)){u.order='idle';}
   } else if(u.order==='attack'){
@@ -2163,7 +2244,7 @@ function updateUnit(u,dt){
       if(dist<=d.range*TILE){
         u.path=null;
         u.angle=Math.atan2(t.y-u.y,t.x-u.x);
-        if(u.cool<=0){u.cool=d.rof;fireAt(u,t,d.dmg);}
+        if(u.cool<=0){const R=rankOf(u);u.cool=d.rof*R.rof;fireAt(u,t,d.dmg*R.dmg);}
       } else {
         // chase: repath occasionally
         if(!u.path||tick%20===u.id%20){
@@ -2209,7 +2290,7 @@ function updateFlyer(u,dt,d){
         const ta=Math.atan2(t.y-u.y,t.x-u.x);
         let da=ta-u.angle; while(da>Math.PI)da-=6.283; while(da<-Math.PI)da+=6.283;
         u.angle+=Math.max(-5*dt,Math.min(5*dt,da));
-        if(u.cool<=0){u.cool=d.rof;fireAt(u,t,d.dmg);}
+        if(u.cool<=0){const R=rankOf(u);u.cool=d.rof*R.rof;fireAt(u,t,d.dmg*R.dmg);}
       } else flyToward(u,t.x,t.y,d.speed,dt);
     }
   } else if(u.order==='move'){
@@ -2524,7 +2605,7 @@ function buildSidebar(){
    War Factory buys a second concurrent line. Structures stay serial: placement is a
    single-slot interaction, so a second Construction Yard adds no line. */
 const PRODUCER_OF={structure:'conyard', infantry:'barracks', vehicle:'factory'};
-function producersOf(tab){return buildings.filter(b=>b.owner===PLAYER&&b.type===PRODUCER_OF[tab]);}
+function producersOf(tab){return buildings.filter(b=>b.owner===PLAYER&&b.type===PRODUCER_OF[tab]&&b.built>=1);}
 /* No conyard means no construction (C&C rule): structure capacity is 0 without one.
    Unit tabs scale with facility count as before. */
 function lineCapacity(tab){return tab==='structure'?(producersOf(tab).length?1:0):producersOf(tab).length;}
@@ -2570,7 +2651,7 @@ function updateQueues(dt){
     const lines=queues[tab];
     for(let i=lines.length-1;i>=0;i--){
       const q=lines[i];
-      if(tab!=='structure'&&!buildings.some(b=>b.id===q.bid)){
+      if(tab!=='structure'&&!buildings.some(b=>b.id===q.bid&&b.owner===PLAYER)){   // lost, or captured
         const host=freeProducer(tab);              // host destroyed mid-build
         if(host)q.bid=host.id;                     // hand the line to a spare facility
         else{credits[PLAYER]+=q.paid;lines.splice(i,1);eva('Production halted');continue;}
@@ -2696,6 +2777,10 @@ function drawIconArt(c,type){
     bg.addColorStop(0,shade(col,1.35));bg.addColorStop(0.7,col);bg.addColorStop(1,shade(col,0.55));
     c.fillStyle=bg;c.beginPath();c.arc(0,-1,6,0,6.28);c.fill();
     if(type==='rocketeer'){c.fillStyle='#3a414c';c.fillRect(1,-6,13,5);}
+    else if(type==='engineer'){                 // wrench and tool case
+      c.fillStyle='#d9a21c';c.fillRect(3,1,7,5);c.fillStyle='#14161a';c.fillRect(5,0,3,1.5);
+      c.save();c.translate(10,-5);c.rotate(0.7);c.fillStyle='#c8ccd2';c.fillRect(-1,-1,2.2,9);
+      c.beginPath();c.arc(0.1,-1.5,2.6,0,6.28);c.fill();c.fillStyle='#171a1e';c.fillRect(-0.9,-4.6,1.8,3);c.restore();}
     else if(type==='grenadier'){c.strokeStyle='#1c1f24';c.lineWidth=3.5;c.beginPath();c.moveTo(2,-1);c.lineTo(10,-1);c.stroke();
       c.fillStyle='#454a51';c.fillRect(9,-3.5,3.5,5);}
     else{c.strokeStyle='#c8ccd2';c.lineWidth=2;c.beginPath();c.moveTo(2,-1);c.lineTo(13,-1);c.stroke();}
@@ -2727,6 +2812,8 @@ function updateAI(dt){
       else if(factory&&roll<0.5&&credits[ENEMY]>=UDEFS.heavy.cost&&tick>ai.heavyAt&&tech>=4){pick='heavy';src=factory;}
       else if(factory&&tech>=3&&roll<0.58&&credits[ENEMY]>=UDEFS.buggy.cost){pick='buggy';src=factory;}
       else if(barracks&&tech>=4&&roll<0.68&&credits[ENEMY]>=UDEFS.grenadier.cost){pick='grenadier';src=barracks;}
+      else if(barracks&&tech>=3&&roll<0.72&&credits[ENEMY]>=UDEFS.engineer.cost
+              &&!units.some(u=>u.owner===ENEMY&&u.type==='engineer')){pick='engineer';src=barracks;}
       else if(barracks&&roll<0.85&&credits[ENEMY]>=UDEFS.trooper.cost){pick='trooper';src=barracks;}
       else if(barracks&&tech>=2&&credits[ENEMY]>=UDEFS.rocketeer.cost){pick='rocketeer';src=barracks;}
       if(pick){credits[ENEMY]-=UDEFS[pick].cost;produceUnit(ENEMY,pick,src);}
@@ -2735,6 +2822,17 @@ function updateAI(dt){
     if(factory&&!units.some(u=>u.owner===ENEMY&&u.type==='harvester')&&credits[ENEMY]>=UDEFS.harvester.cost){
       credits[ENEMY]-=UDEFS.harvester.cost;produceUnit(ENEMY,'harvester',factory);
     }
+  }
+  /* engineers go for the player's weakest structure they can actually take,
+     or failing that the nearest one to sabotage */
+  if(tick%60===30)for(const e of units){
+    if(e.owner!==ENEMY||e.type!=='engineer'||e.order==='capture')continue;
+    const cand=buildings.filter(b=>b.owner===PLAYER&&capturable(b));
+    if(!cand.length)continue;
+    const weak=cand.filter(b=>b.hp<=b.maxhp*0.5);
+    const pool=weak.length?weak:cand;
+    pool.sort((a,b)=>Math.hypot(a.x-e.x,a.y-e.y)-Math.hypot(b.x-e.x,b.y-e.y));
+    orderCapture(e,pool[0]);
   }
   // upkeep: the enemy repairs damaged structures while it can afford to
   if(tick%90===45)for(const b of buildings)
@@ -2847,7 +2945,22 @@ function rightClickOrder(mx,my){
   }
   const {wx,wy}=groundUnder(mx,my);
   const tgt=entityAt(mx,my,ENEMY);
-  const movers=selection.filter(u=>u.hp>0);
+  let movers=selection.filter(u=>u.hp>0);
+  /* engineers take the structure under the cursor — an enemy one to capture
+     or sabotage, one of ours to restore — while the rest of the selection
+     carries on with the ordinary order */
+  const engs=movers.filter(u=>u.type==='engineer');
+  if(engs.length){
+    const own=entityAt(mx,my,PLAYER);
+    const site=capturable(tgt)?tgt:(capturable(own)&&own.hp<own.maxhp?own:null);
+    if(site){
+      for(const e of engs)orderCapture(e,site);
+      movers=movers.filter(u=>u.type!=='engineer');
+      beep(620,0.06,'square',0.05);
+      particles.push({x:site.x,y:site.y,vx:0,vy:0,life:0.35,max:0.35,size:14,c:'#7cc4ff',kind:'ring'});
+      if(!movers.length)return;
+    }
+  }
   if(tgt){
     for(const u of movers)orderAttack(u,tgt);
     beep(380,0.05,'square',0.05);
@@ -3841,6 +3954,7 @@ const UMODELS={
   trooper(g,trim,dark){ infantry(g,trim,'rifle'); },
   rocketeer(g,trim,dark){ infantry(g,trim,'tube'); },
   grenadier(g,trim,dark){ infantry(g,trim,'lobber'); },
+  engineer(g,trim,dark){ infantry(g,trim,'kit'); },
   buggy(g,trim,dark){
     for(const sx of [-1,1])for(const sz of [-1,1])
       wheel(g,3.6,2.8,TYRE,sx*7.5,3.6,sz*5.2);
@@ -3998,6 +4112,12 @@ function infantry(g,trim,weapon){
   } else if(weapon==='lobber'){
     blk(t,7,1.8,1.8,IRON,4,6.6,-2.6,true);
     cyl(t,1.6,2.2,'#454a51',6.5,6.3,-2.6,true);
+  } else if(weapon==='kit'){
+    /* no weapon: a tool case in hand, a heavier pack, and a white helmet band
+       so an engineer is picked out of a squad at a glance */
+    blk(t,3.4,2.6,1.6,HAZARD,2.2,3.4,-3.4,true);
+    blk(t,3,4.6,4.2,'#454b35',-3.1,5,0,true);
+    blk(t,4.35,0.9,4.55,'#e8e8e0',0,11.55,0);
   } else {
     blk(t,9,1.2,1.2,IRON,4,7,-2.6,true);
     blk(t,3,1.4,1.8,'#5b4c32',1.5,6.6,-2.6,true);
@@ -4533,6 +4653,7 @@ float groundOre;
     if(src.userData.blink)g.userData.blink=src.userData.blink.map(e=>({o:map.get(e.o),phase:e.phase}));
     if(src.userData.stacks)g.userData.stacks=src.userData.stacks;   // immutable, shared
     g.userData.phase=Math.random()*6.28;   // so a row of identical plants does not pulse in lockstep
+    g.userData.owner=owner;
     return g;
   }
   /* Damage reads as a red wash. Cloned meshes share the prototype's materials,
@@ -4764,6 +4885,8 @@ float groundOre;
       if(!explored[idx(b.tx,b.ty)])continue;
       live.add(b.id);
       let v=bView.get(b.id);
+      /* captured: the structure is the same, the livery is the new owner's */
+      if(v&&v.userData.owner!==b.owner){ entities.remove(v); bView.delete(b.id); v=null; }
       if(!v){
         v=instantiate('b',b.type,b.owner);
         v.userData.hitR=Math.max(b.w,b.h)*TILE*0.5;
@@ -5203,6 +5326,7 @@ function render(dt){
     ctx.moveTo(b.x+r-L,b.y+r);ctx.lineTo(b.x+r,b.y+r);ctx.lineTo(b.x+r,b.y+r-L);
     ctx.stroke();
     drawHealth(b.x-r,b.y-r-8,r*2,u.hp/u.maxhp);
+    if(u.rank)drawRank(b.x+r+3,b.y-r-9,u.rank);
   }
   if(selectedBuilding&&selectedBuilding.hp>0){
     drawBuildingBrackets(selectedBuilding);
@@ -5212,7 +5336,7 @@ function render(dt){
   const hov=entityAt(mouse.x,mouse.y,undefined);
   if(hov&&hov.hp>0){
     const b=hoverBox(hov);
-    if(b)drawHealth(b.x-b.r,b.y-b.r-8,b.r*2,hov.hp/hov.maxhp);
+    if(b){ drawHealth(b.x-b.r,b.y-b.r-8,b.r*2,hov.hp/hov.maxhp); if(hov.rank)drawRank(b.x+b.r+3,b.y-b.r-9,hov.rank); }
   }
   updateHoverTip(hov);
   /* placement ghost: the real structure, translucent, standing on the ground it
@@ -5266,6 +5390,17 @@ function drawBuildingBrackets(b){
   const cx=(q[0].x+q[2].x)/2, top=Math.min(q[0].y,q[1].y,q[2].y,q[3].y);
   const wid=Math.max(30,Math.abs(q[1].x-q[0].x));
   drawHealth(cx-wid/2,top-11,wid,b.hp/b.maxhp);
+}
+/* Rank chevrons: one gold for a veteran, two for an elite. */
+function drawRank(x,y,rank){
+  ctx.save(); ctx.lineWidth=2; ctx.lineJoin='miter';
+  for(let i=0;i<rank;i++){
+    const yy=y+i*4;
+    ctx.strokeStyle='#14161a'; ctx.beginPath(); ctx.moveTo(x,yy); ctx.lineTo(x+4,yy+3.5); ctx.lineTo(x+8,yy); ctx.stroke();
+    ctx.strokeStyle='#ffd76e'; ctx.lineWidth=1.4; ctx.beginPath(); ctx.moveTo(x,yy); ctx.lineTo(x+4,yy+3.5); ctx.lineTo(x+8,yy); ctx.stroke();
+    ctx.lineWidth=2;
+  }
+  ctx.restore();
 }
 /* The C&C repair wrench: pulses over a structure while it is being mended. */
 function drawRepairMark(b){
@@ -5399,7 +5534,8 @@ function updateHUD(){
     si.style.display='block';
     const h=selection.find(u=>u.type==='harvester');
     si.textContent=selection.length===1
-      ? UDEFS[selection[0].type].name.toUpperCase()+'  HP '+Math.ceil(selection[0].hp)+'/'+selection[0].maxhp+(h?'  ORE '+h.cargo+'/500':'')
+      ? UDEFS[selection[0].type].name.toUpperCase()+(selection[0].rank?'  '+RANKS[selection[0].rank].name:'')
+        +'  HP '+Math.ceil(selection[0].hp)+'/'+selection[0].maxhp+(h?'  ORE '+h.cargo+'/500':'')
       : selection.length+' UNITS SELECTED';
   } else if(selectedBuilding){
     si.style.display='block';
@@ -5477,13 +5613,18 @@ function updateHoverTip(hov){
   const tip=document.getElementById('hovertip');
   const h=(!started||gameOver||placing||mouse.dragging||!hov||hov.hp<=0||hov===selectedBuilding)?null:hov;
   if(!h){if(tipEnt){tip.style.display='none';tipEnt=null;}return;}
-  if(h!==tipEnt){
+  const eng=h.cls==='b'&&capturable(h)&&selection.find(u=>u.type==='engineer');
+  const act=eng?engineerAction(eng,h):null;
+  const key=h.id+'|'+(act||'')+'|'+(h.rank||0);
+  if(key!==tipEnt){
     const d=h.cls==='b'?BDEFS[h.type]:UDEFS[h.type];
     tip.innerHTML='<b>'+esc(d.name.toUpperCase())+'</b>'
       +(h.owner===PLAYER?'':' <span style="color:#c23b3b">ENEMY</span>')
+      +(h.cls==='u'&&h.rank?' <span style="color:#ffd76e">'+RANKS[h.rank].name+'</span>':'')
+      +(act?'<br><span style="color:#7cc4ff">ENGINEER: '+act+'</span>':'')
       +(h.cls==='b'&&d.desc?'<br>'+esc(d.desc):'');
     tip.style.display='block';
-    tipEnt=h;
+    tipEnt=key;
   }
   // keep the tip inside the viewport
   tip.style.left=Math.max(4,Math.min(VW-tip.offsetWidth-4, mouse.x+14))+'px';
@@ -5858,7 +5999,8 @@ function serializeState(){
       repairing:!!b.repairing,rally:b.rally||null})),
     units:units.map(u=>({id:u.id,owner:u.owner,type:u.type,x:u.x,y:u.y,hp:u.hp,angle:u.angle,
       turAngle:u.turAngle,order:u.order,target:tid(u.target),dest:u.dest,cool:u.cool,
-      cargo:u.cargo,hstate:u.hstate,oreTile:u.oreTile,htimer:u.htimer,unloaded:u.unloaded,alt:u.alt,rotor:u.rotor})),
+      cargo:u.cargo,hstate:u.hstate,oreTile:u.oreTile,htimer:u.htimer,unloaded:u.unloaded,alt:u.alt,rotor:u.rotor,
+      xp:u.xp||0,rank:u.rank||0})),
     queues:{structure:queues.structure.map(cloneLine),infantry:queues.infantry.map(cloneLine),vehicle:queues.vehicle.map(cloneLine)},
     ai:Object.assign({},ai),
     groups:Object.fromEntries(Object.entries(groups).map(([k,a])=>[k,a.filter(u=>u.hp>0).map(u=>u.id)])),
@@ -5891,13 +6033,14 @@ function restoreState(S){
       cool:s.cool||0,cargo:s.cargo||0,hstate:s.hstate||'seek',oreTile:s.oreTile||null,
       flash:0,anchorX:s.x,anchorY:s.y,stuck:0,muzzle:0,recoil:0,moving:0,
       phase:Math.random()*6.28,turAngle:(s.turAngle??s.angle)||0,trailD:0,spot:0,
-      htimer:s.htimer||0,unloaded:s.unloaded||0,alt:s.alt||0,rotor:s.rotor||0,_t:s.target};
+      htimer:s.htimer||0,unloaded:s.unloaded||0,alt:s.alt||0,rotor:s.rotor||0,_t:s.target,
+      xp:s.xp||0,rank:s.rank||0};
     units.push(u); byId.set(u.id,u);
   }
   for(const b of buildings){b.target=b._t?byId.get(b._t)||null:null; delete b._t;}
   for(const u of units){
     u.target=u._t?byId.get(u._t)||null:null; delete u._t;
-    if(u.order==='attack'&&!u.target)u.order='idle';
+    if((u.order==='attack'||u.order==='capture')&&!u.target)u.order='idle';
     if(u.order==='move'&&u.dest&&!UDEFS[u.type].fly){u.path=findPath(u.x/TILE|0,u.y/TILE|0,u.dest[0]/TILE|0,u.dest[1]/TILE|0);u.pi=0;}
   }
   queues={structure:(S.queues.structure||[]).map(cloneLine),infantry:(S.queues.infantry||[]).map(cloneLine),vehicle:(S.queues.vehicle||[]).map(cloneLine)};
@@ -6121,7 +6264,7 @@ window.ID3={
     return !!e;
   },
   step(n,dt){ for(let i=0;i<n;i++){ tick++; for(const u of units)updateUnit(u,dt||STEP);
-    for(const b of buildings)updateBuilding(b,dt||STEP); updateProjectiles(dt||STEP); updateRepairs(dt||STEP); } updateFog(); },
+    for(const b of buildings)updateBuilding(b,dt||STEP); updateProjectiles(dt||STEP); updateRepairs(dt||STEP); updateVeterans(dt||STEP); } updateFog(); },
   spawn(owner,type,tx,ty){ return addUnit(owner,type,(tx+0.5)*TILE,(ty+0.5)*TILE); },
   build(owner,type,tx,ty){ const b=addBuilding(owner,type,tx,ty); b.built=1; return b; },
   theme(i){ return R3D.setTheme(i); },
@@ -6140,7 +6283,7 @@ window.ID3={
     get camY(){ return camY; },           set camY(v){ camY=v; },
     canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
     Campaign, showBoard, showBriefing,
-    setRepair, sellBuilding, setRally, spawnUnitAt, refreshActions,
+    setRepair, sellBuilding, setRally, spawnUnitAt, refreshActions, orderCapture, awardKill, dealDamage,
     get credits(){ return credits; }, get selectedBuilding(){ return selectedBuilding; },
     set selectedBuilding(v){ selectedBuilding=v; },
   },
@@ -6177,6 +6320,7 @@ function loop(ts){
       updateProjectiles(STEP);
       updateQueues(STEP);
       updateRepairs(STEP);
+      updateVeterans(STEP);
       updateRollouts(STEP);
       updateAI(STEP);
       shake*=0.85;

@@ -281,6 +281,34 @@ const rally = await page.evaluate(() => {
 });
 check('units from a facility go to its rally point', rally.d < 40, `${rally.d.toFixed(0)} units from the flag`);
 
+/* ---- engineers: capture a weakened structure, sabotage a sound one ---- */
+const eng = await page.evaluate(() => {
+  const S = ID3.sim;
+  const weak = ID3.build(1, 'barracks', 24, S.MAPH - 24); weak.hp = weak.maxhp * 0.4;
+  const sound = ID3.build(1, 'power', 30, S.MAPH - 24);
+  const e1 = ID3.spawn(0, 'engineer', 22, S.MAPH - 22), e2 = ID3.spawn(0, 'engineer', 29, S.MAPH - 21);
+  S.orderCapture(e1, weak); S.orderCapture(e2, sound);
+  ID3.step(300, 1 / 30);
+  ID3.R3D.render(0);
+  let view = null;
+  ID3.R3D.scene.traverse(o => { if (o.userData && o.userData.eid === weak.id) view = o; });
+  return { owner: weak.owner, viewOwner: view && view.userData.owner, soundHp: sound.hp / sound.maxhp,
+           left: S.units.filter(u => u.type === 'engineer').length };
+});
+check('an engineer captures a weakened structure, re-skinned for its new owner',
+  eng.owner === 0 && eng.viewOwner === 0, `owner ${eng.owner}, view livery ${eng.viewOwner}`);
+check('an engineer sabotages a sound structure and is spent',
+  eng.soundHp < 0.7 && eng.left === 0, `${(eng.soundHp * 100).toFixed(0)}% left, ${eng.left} engineers remain`);
+
+/* ---- veterancy: kills promote, and rank hits harder ---- */
+const vet = await page.evaluate(() => {
+  const S = ID3.sim;
+  const u = ID3.spawn(0, 'tank', 12, S.MAPH - 30);
+  for (let i = 0; i < 2; i++) { const v = ID3.spawn(1, 'tank', 40, 10); S.awardKill(u, v); v.hp = 0; }
+  return { rank: u.rank, xp: u.xp };
+});
+check('kills promote a unit', vet.rank >= 1, `rank ${vet.rank} after $${vet.xp} of kills`);
+
 /* ---- save / restore survives the new camera semantics ---- */
 const save = await page.evaluate(() => {
   const S = ID3.sim;
