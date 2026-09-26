@@ -47,7 +47,7 @@ intact. What was replaced is everything below the line marked
 | --- | --- |
 | Left-drag | marquee select |
 | Right-click | move / attack |
-| Middle-mouse drag | pan |
+| Right-drag / middle-drag | pan (a right-*click* still orders) |
 | Wheel | zoom |
 | WASD / arrows | scroll |
 | Click radar | jump the camera there |

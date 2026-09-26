@@ -126,17 +126,52 @@ const sel = await page.evaluate(async () => {
 check('click selects the unit under the cursor', sel.picked === 1 && sel.got === sel.wanted,
   `${sel.picked} selected (${sel.got})`);
 
-/* ---- right-click issues a move order to the ground that was clicked ---- */
-const order = await page.evaluate(() => {
-  const S = ID3.sim, view = document.getElementById('view');
-  const u = S.selection[0];
+/* ---- right-click issues a move order to the ground that was clicked ----
+   The order goes on release (a right-press may yet become a pan), so this is
+   a real press-and-release through Playwright's mouse, not a synthetic event. */
+const orderAt = await page.evaluate(() => {
+  const u = ID3.sim.selection[0];
   const tgt = { x: u.x + 130, y: u.y - 90 };
   const p = ID3.R3D.project(tgt.x, ID3.R3D.groundH(tgt.x, tgt.y), tgt.y);
-  view.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, clientX: p.x, clientY: p.y }));
-  return u.dest ? { d: Math.hypot(u.dest[0] - tgt.x, u.dest[1] - tgt.y), order: u.order } : null;
+  return { tgt, p };
 });
+await page.mouse.move(orderAt.p.x, orderAt.p.y);
+await page.mouse.down({ button: 'right' });
+await page.mouse.up({ button: 'right' });
+const order = await page.evaluate(tgt => {
+  const u = ID3.sim.selection[0];
+  return u.dest ? { d: Math.hypot(u.dest[0] - tgt.x, u.dest[1] - tgt.y), order: u.order } : null;
+}, orderAt.tgt);
 check('right-click orders a move to that ground', order && order.d < 60,
   order ? `${order.d.toFixed(0)} units from the click, order=${order.order}` : 'no destination set');
+
+/* ---- right-drag pans the map (both axes) and gives no order ---- */
+const before = await page.evaluate(() => {
+  const u = ID3.sim.selection[0];
+  ID3.cam(1100, 1100, 700);
+  return { camX: ID3.sim.camX, camY: ID3.sim.camY, dest: u.dest && u.dest.slice() };
+});
+await page.mouse.move(640, 400);
+await page.mouse.down({ button: 'right' });
+await page.mouse.move(560, 300, { steps: 8 });   // hand drags up-left: map follows it
+await page.mouse.up({ button: 'right' });
+const pan = await page.evaluate(b => {
+  const u = ID3.sim.selection[0];
+  return { dx: ID3.sim.camX - b.camX, dy: ID3.sim.camY - b.camY,
+           reordered: JSON.stringify(u.dest) !== JSON.stringify(b.dest) };
+}, before);
+check('right-drag pans the map like a hand, both axes',
+  pan.dx > 20 && pan.dy > 20 && !pan.reordered,
+  `camera moved ${pan.dx.toFixed(0)}, ${pan.dy.toFixed(0)}${pan.reordered ? ' — but it also issued an order' : ''}`);
+
+/* ---- keyboard scroll reaches north and south, not just east and west ---- */
+const y0 = await page.evaluate(() => ID3.sim.camY);
+await page.keyboard.down('s'); await page.waitForTimeout(350); await page.keyboard.up('s');
+const y1 = await page.evaluate(() => ID3.sim.camY);
+await page.keyboard.down('w'); await page.waitForTimeout(700); await page.keyboard.up('w');
+const y2 = await page.evaluate(() => ID3.sim.camY);
+check('W / S scroll the camera north and south', y1 > y0 + 20 && y2 < y1 - 20,
+  `S: ${(y1 - y0).toFixed(0)}, W: ${(y2 - y1).toFixed(0)}`);
 
 /* ---- marquee selection is a screen rectangle ---- */
 const marquee = await page.evaluate(() => {

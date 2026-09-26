@@ -284,7 +284,7 @@
       <div class="brief" id="mctl">
         <b>CONTROLS</b><br>
         &bull; Left-drag: select units &nbsp;&bull; Right-click: move / attack<br>
-        &bull; Middle-mouse drag: pan map &nbsp;&bull; WASD / arrows: scroll &nbsp;&bull; Click radar to jump<br>
+        &bull; <b>Right-drag</b> (or middle-drag): pan map &nbsp;&bull; Wheel: zoom &nbsp;&bull; WASD / arrows: scroll &nbsp;&bull; Click radar to jump<br>
         &bull; <b>P</b> or <b>Space</b>: pause / resume (auto-pauses if you switch away)<br>
         &bull; <b>E</b> or the top-right button: toggle edge-of-screen scrolling (off by default)<br>
         &bull; Ctrl+1-5: assign group &nbsp;&bull; 1-5: recall group &nbsp;&bull; Right-click icon: cancel &amp; refund<br>
@@ -312,7 +312,7 @@
       <div class="tab" data-tab="vehicle">VEHICLES</div>
     </div>
     <div id="icons"></div>
-    <div id="helpline">P / SPACE PAUSES &middot; RIGHT-CLICK ICON CANCELS &amp; REFUNDS &middot; ESC DESELECTS</div>
+    <div id="helpline">RIGHT-DRAG PANS &middot; P / SPACE PAUSES &middot; RIGHT-CLICK ICON CANCELS &amp; REFUNDS &middot; ESC DESELECTS</div>
     <div id="sblogo">DOMINION BATTLENET v2.00 &middot; 3D</div>
   </div>
 </div>
@@ -2674,11 +2674,18 @@ function updateAI(dt){
 /* ================= INPUT ================= */
 const keys={};
 let mouse={x:0,y:0,down:false,dragX:0,dragY:0,dragging:false};
-/* Middle-button (scroll-wheel) grab-pan: hold it and drag to slide the map like a
-   hand tool. Left/right are already selection and orders, so the wheel button is
-   the one free of conflicts. Tracked at window level so a drag that runs off the
-   canvas keeps panning. */
-let panning=null;
+/* Grab-pan: hold a button and drag to slide the map like a hand tool.
+   - Middle button pans outright.
+   - Right button does double duty, because plenty of mice and every trackpad
+     make the middle button awkward: a click is an order, a drag is a pan. It
+     is not decided on press — the gesture stays "armed" until the pointer
+     travels PAN_SLOP pixels (then it is a pan, and no order is given) or the
+     button comes back up first (then it was a click, and the order goes to
+     the spot originally pressed).
+   Tracked at window level so a drag that runs off the canvas keeps panning. */
+const PAN_SLOP=6;
+let panning=null;          // {button, startX, startY, lastX, lastY, live}
+let panEndedAt=-1e9;       // a right-drag released off the canvas must not open the browser menu
 /* Edge-of-screen scrolling is opt-in: on by default it fights you every time the
    cursor nears an edge to pick a unit, so it starts off and the preference sticks. */
 const EDGE_KEY='ironDominion.edgeScroll';
@@ -2730,21 +2737,52 @@ window.addEventListener('keydown',e=>{
 window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 view.addEventListener('contextmenu',e=>e.preventDefault());
 view.addEventListener('auxclick',e=>{if(e.button===1)e.preventDefault();});   // kill middle-click autoscroll
+window.addEventListener('contextmenu',e=>{ if(performance.now()-panEndedAt<400)e.preventDefault(); });
+/* Screen to ground is a raycast against the real heightfield, so an order given
+   halfway up a scarp lands on the ground the player is pointing at rather than
+   on the flat plane behind it. */
+function groundUnder(mx,my){
+  const g=R3D.screenToGround(mx,my);
+  return {wx:g?g.x:camX, wy:g?g.y:camY};
+}
+/* A right-click that stayed a click: cancel placement, or order the selection
+   to attack what is under the cursor, or move there in formation. */
+function rightClickOrder(mx,my){
+  if(paused)return;   // no orders while frozen
+  if(placing){placing=null;return;}
+  if(!selection.length)return;
+  const {wx,wy}=groundUnder(mx,my);
+  const tgt=entityAt(mx,my,ENEMY);
+  const movers=selection.filter(u=>u.hp>0);
+  if(tgt){
+    for(const u of movers)orderAttack(u,tgt);
+    beep(380,0.05,'square',0.05);
+    particles.push({x:wx,y:wy,vx:0,vy:0,life:0.3,max:0.3,size:10,c:'#ff6a5e',kind:'ring'});
+  } else {
+    // spread formation
+    const n=movers.length, cols=Math.ceil(Math.sqrt(n));
+    movers.forEach((u,i)=>{
+      const ox=(i%cols-cols/2+0.5)*TILE*0.9, oy=((i/cols|0)-cols/2+0.5)*TILE*0.9;
+      orderMove(u,wx+ox,wy+oy);
+    });
+    beep(520,0.04,'square',0.04);
+    particles.push({x:wx,y:wy,vx:0,vy:0,life:0.3,max:0.3,size:9,c:'#7cffa0',kind:'ring'});
+  }
+}
 view.addEventListener('mousedown',e=>{
-  if(e.button===1){   // middle button: grab-pan (works even while paused)
-    e.preventDefault();
-    panning={lastX:e.clientX,lastY:e.clientY};
-    view.style.cursor='grabbing';
+  if(e.button===1||e.button===2){
+    /* Middle pans at once; right waits to see whether it is a click or a drag.
+       Both work while paused — reading the battlefield is not an order. */
+    if(e.button===1)e.preventDefault();
+    panning={button:e.button,startX:e.clientX,startY:e.clientY,
+             lastX:e.clientX,lastY:e.clientY,live:e.button===1};
+    if(panning.live)view.style.cursor='grabbing';
     return;
   }
   if(paused)return;   // no orders while frozen
   const r=view.getBoundingClientRect();
   const mx=e.clientX-r.left, my=e.clientY-r.top;
-  /* Screen to ground is a raycast against the real heightfield now, so an order
-     given halfway up a scarp lands on the ground the player is pointing at
-     rather than on the flat plane behind it. */
-  const g=R3D.screenToGround(mx,my);
-  const wx=g?g.x:camX, wy=g?g.y:camY;
+  const {wx,wy}=groundUnder(mx,my);
   if(e.button===0){
     if(placing){
       const d=BDEFS[placing];
@@ -2761,26 +2799,6 @@ view.addEventListener('mousedown',e=>{
     }
     mouse.down=true;mouse.dragging=false;
     mouse.dragX=mx;mouse.dragY=my;mouse.x=mx;mouse.y=my;
-  } else if(e.button===2){
-    if(placing){placing=null;return;}
-    if(!selection.length)return;
-    // attack if enemy under cursor
-    const tgt=entityAt(mx,my,ENEMY);
-    const movers=selection.filter(u=>u.hp>0);
-    if(tgt){
-      for(const u of movers)orderAttack(u,tgt);
-      beep(380,0.05,'square',0.05);
-      particles.push({x:wx,y:wy,vx:0,vy:0,life:0.3,max:0.3,size:10,c:'#ff6a5e',kind:'ring'});
-    } else {
-      // spread formation
-      const n=movers.length, cols=Math.ceil(Math.sqrt(n));
-      movers.forEach((u,i)=>{
-        const ox=(i%cols-cols/2+0.5)*TILE*0.9, oy=((i/cols|0)-cols/2+0.5)*TILE*0.9;
-        orderMove(u,wx+ox,wy+oy);
-      });
-      beep(520,0.04,'square',0.04);
-      particles.push({x:wx,y:wy,vx:0,vy:0,life:0.3,max:0.3,size:9,c:'#7cffa0',kind:'ring'});
-    }
   }
 });
 view.addEventListener('mousemove',e=>{
@@ -2790,6 +2808,12 @@ view.addEventListener('mousemove',e=>{
 });
 window.addEventListener('mousemove',e=>{   // grab-pan tracked globally so it survives leaving the canvas
   if(!panning)return;
+  if(!panning.live){
+    if(Math.hypot(e.clientX-panning.startX,e.clientY-panning.startY)<PAN_SLOP)return;
+    /* Crossed the slop: this right-press is a pan, not an order. Measuring from
+       the press point keeps the map pinned to the hand, slop included. */
+    panning.live=true; view.style.cursor='grabbing';
+  }
   const s=R3D.panScale();
   camX=clampCamX(camX-(e.clientX-panning.lastX)*s.x);
   camY=clampCamY(camY-(e.clientY-panning.lastY)*s.y);
@@ -2801,10 +2825,22 @@ view.addEventListener('wheel',e=>{
   e.preventDefault();
   R3D.zoomBy(e.deltaY>0?1.12:1/1.12);
 },{passive:false});
-function endPan(){if(panning){panning=null;view.style.cursor='';}}
+function endPan(){
+  if(!panning)return;
+  if(panning.live)panEndedAt=performance.now();
+  panning=null; view.style.cursor='';
+}
 window.addEventListener('blur',endPan);   // pointer left the window mid-drag
 window.addEventListener('mouseup',e=>{
-  if(e.button===1){endPan();return;}
+  if(panning&&e.button===panning.button){
+    const p=panning; endPan();
+    if(p.button===2&&!p.live){   // never became a drag: it was a right-click
+      const r=view.getBoundingClientRect();
+      rightClickOrder(p.startX-r.left,p.startY-r.top);
+    }
+    return;
+  }
+  if(e.button===1||e.button===2)return;
   if(paused){mouse.down=false;mouse.dragging=false;return;}
   if(e.button!==0||!mouse.down)return;
   mouse.down=false;
