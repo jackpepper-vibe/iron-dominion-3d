@@ -67,6 +67,17 @@ const POSES = [
       ID3.step(28, 1 / 30);   // first exchanges: shots in the air, nobody dead yet
       ID3.look(13, y0 + 1, 520);
     } },
+  { name: 'boom', mission: 0, steps: 0, setup: () => {
+      /* a firefight at its loudest: a building and two tanks going up, shells landing */
+      const S = ID3.sim, y0 = S.MAPH - 24;
+      const b = ID3.build(1, 'power', 12, y0 - 4);
+      const t1 = ID3.spawn(1, 'tank', 17, y0), t2 = ID3.spawn(1, 'heavy', 9, y0 + 1);
+      for (let i = 0; i < 4; i++) ID3.spawn(0, 'tank', 10 + i * 2, y0 + 5);
+      ID3.step(20, 1 / 30);
+      ID3.look(13, y0 + 1, 520); ID3.R3D.render(0);   // they need views before they can leave wrecks
+      b.hp = 0; S.killEntity(b); t1.hp = 0; S.killEntity(t1); t2.hp = 0; S.killEntity(t2);
+      ID3.look(13, y0 + 1, 520);
+    }, settle: 260 },
   { name: 'enemy', mission: 4, steps: 30, setup: () => {
       const S = ID3.sim, c = S.buildings.find(b => b.owner === 1 && b.type === 'conyard');
       ID3.cam(c.x, c.y + 90, 760);
@@ -103,7 +114,7 @@ for (const pose of POSES) {
      then give the renderer a few frames to settle shadows and uploads. */
   await page.keyboard.press('p');
   await page.evaluate(() => { document.getElementById('pausebanner').style.display = 'none'; });
-  await page.waitForTimeout(700);
+  await page.waitForTimeout(pose.settle ?? 700);
   const file = resolve(outDir, `${tag}-${pose.name}.png`);
   await page.locator('#view').screenshot({ path: file });
   let timing = '';

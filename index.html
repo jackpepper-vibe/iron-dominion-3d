@@ -4454,13 +4454,16 @@ float groundOre;
      smoke and then open fire from a structure below half and a quarter
      health. Unpowered bases fall still: no beacons, no stack output. All of
      it reads the sim; none of it writes. */
-  const ambient=[];                  // {x,y,z,vx,vy,vz,age,life,size,kind}
-  const AMBIENT_CAP=260;
-  function puff(x,y,z,kind,size){
+  const ambient=[];                  // {x,y,z,vx,vy,vz,age,life,size,kind,grav}; age<0 = not yet born
+  const AMBIENT_CAP=700;
+  function fx(p){
     if(ambient.length>=AMBIENT_CAP)return;
+    ambient.push(Object.assign({vx:0,vy:0,vz:0,age:0,grav:0},p));
+  }
+  function puff(x,y,z,kind,size){
     const hot=kind==='fire';
-    ambient.push({x,y,z,vx:(Math.random()-0.5)*4+4,vy:hot?18:10+Math.random()*6,vz:(Math.random()-0.5)*4-2,
-      age:0,life:hot?0.7+Math.random()*0.4:2.6+Math.random()*1.6,size,kind});
+    fx({x,y,z,vx:(Math.random()-0.5)*4+4,vy:hot?18:10+Math.random()*6,vz:(Math.random()-0.5)*4-2,
+      life:hot?0.7+Math.random()*0.4:2.6+Math.random()*1.6,size,kind});
   }
   function animateStructure(v,b,dt,powered){
     const on=b.built>=1&&powered[b.owner], t=GROUND_TIME.value+v.userData.phase;
@@ -4483,28 +4486,173 @@ float groundOre;
     for(let i=ambient.length-1;i>=0;i--){
       const a=ambient[i]; a.age+=dt;
       if(a.age>=a.life){ ambient[i]=ambient[ambient.length-1]; ambient.pop(); continue; }
-      a.x+=a.vx*dt; a.y+=a.vy*dt; a.z+=a.vz*dt; a.vy*=1-0.35*dt;
+      if(a.age<0)continue;
+      a.x+=a.vx*dt; a.y+=a.vy*dt; a.z+=a.vz*dt;
+      a.vy=a.vy*(1-0.35*dt)-a.grav*dt;
+      if(a.kind==='fireball'){ a.vx*=1-2.5*dt; a.vz*=1-2.5*dt; }
     }
+    updateDebris(dt); updateGroundFx(dt); updateWrecks(dt);
   }
+  /* How each kind looks over its life: texture, blend, colour from birth to
+     death, peak opacity, and how much it swells. Additive kinds are light;
+     normal-blended ones are smoke and dust, which must be able to darken. */
   const AMBIENT_LOOK={
-    smoke:{c:[0.62,0.62,0.60],a:0.45,grow:3.2},
-    steam:{c:[0.95,0.96,0.97],a:0.50,grow:3.6},
-    soot: {c:[0.10,0.10,0.10],a:0.70,grow:3.0},
+    smoke:   {tex:'soft',add:false,c0:[0.62,0.62,0.60],c1:[0.70,0.70,0.68],a:0.45,grow:3.2},
+    steam:   {tex:'soft',add:false,c0:[0.95,0.96,0.97],c1:[0.95,0.96,0.97],a:0.50,grow:3.6},
+    soot:    {tex:'soft',add:false,c0:[0.10,0.10,0.10],c1:[0.22,0.22,0.22],a:0.70,grow:3.0},
+    plume:   {tex:'soft',add:false,c0:[0.12,0.11,0.10],c1:[0.42,0.41,0.40],a:0.78,grow:3.4},
+    dust:    {tex:'soft',add:false,c0:[0.58,0.52,0.40],c1:[0.62,0.58,0.50],a:0.55,grow:2.4},
+    gunsmoke:{tex:'soft',add:false,c0:[0.82,0.80,0.76],c1:[0.85,0.85,0.84],a:0.55,grow:2.8},
+    fire:    {tex:'fire',add:true, c0:[1.0,0.80,0.55], c1:[0.9,0.4,0.15], a:0.90,grow:-0.3},
+    fireball:{tex:'fire',add:true, c0:[1.0,0.86,0.55], c1:[0.75,0.22,0.06],a:1.00,grow:1.3},
+    flash:   {tex:'fire',add:true, c0:[1.0,0.98,0.92], c1:[1.0,0.80,0.50], a:1.00,grow:0.6},
   };
   function drawAmbient(){
     for(const a of ambient){
-      const f=a.age/a.life;
-      if(a.kind==='fire'){
-        const s=takeSprite(TEX_FIRE,THREE.AdditiveBlending); liveSprites.push(s);
-        s.position.set(a.x,a.y,a.z); const k=a.size*(1.4-f*0.6)*2; s.scale.set(k,k*1.3,1);
-        s.material.opacity=(1-f)*0.9; s.material.color.setRGB(1,0.8,0.55);
-        continue;
-      }
-      const L=AMBIENT_LOOK[a.kind], s=takeSprite(TEX_SOFT,THREE.NormalBlending); liveSprites.push(s);
+      if(a.age<0)continue;
+      const f=a.age/a.life, L=AMBIENT_LOOK[a.kind];
+      const s=takeSprite(L.tex==='fire'?TEX_FIRE:TEX_SOFT,L.add?THREE.AdditiveBlending:THREE.NormalBlending);
+      liveSprites.push(s);
       s.position.set(a.x,a.y,a.z);
-      const k=a.size*(1+f*L.grow)*2; s.scale.set(k,k,1);
-      s.material.opacity=L.a*Math.min(1,f*6)*(1-f);
-      s.material.color.setRGB(...L.c);
+      const k=a.size*Math.max(0.2,1+f*L.grow)*2; s.scale.set(k,k*(a.kind==='fire'?1.3:1),1);
+      /* smoke fades in over the first sixth of its life; light is born bright */
+      s.material.opacity=L.a*(L.add?Math.pow(1-f,1.4):Math.min(1,f*6)*(1-f));
+      s.material.color.setRGB(L.c0[0]+(L.c1[0]-L.c0[0])*f,L.c0[1]+(L.c1[1]-L.c0[1])*f,L.c0[2]+(L.c1[2]-L.c0[2])*f);
+    }
+    for(const d of debris)if(d.age>=0)d.m.visible=true;
+  }
+
+  /* ---- explosions ----
+     The sim records a blast as one entry with a size. The renderer turns each
+     new one into a composed burst: a white-hot flash, rolling fireballs, a
+     glow thrown on the ground, a shock ring racing outward, chunks of debris
+     that tumble and bounce, and a smoke column that outlives the fire.
+     Scaled by size, so a rifle grenade and a construction yard going up are
+     the same system at different strengths. */
+  const seenBoom=new WeakSet(), lastMuzzle=new WeakMap();
+  function burst(x,z,size,delay){
+    const y=groundH(x,z), S=size, R=()=>Math.random();
+    fx({kind:'flash',x,y:y+S*0.5,z,life:0.16,size:S*1.1,age:-delay});
+    const nb=3+(S/5|0);
+    for(let i=0;i<nb;i++){
+      const a=R()*6.28, d=R()*S*0.45;
+      fx({kind:'fireball',x:x+Math.cos(a)*d,y:y+S*0.3+R()*S*0.3,z:z+Math.sin(a)*d,
+        vx:Math.cos(a)*S*1.2,vy:10+R()*S*0.9,vz:Math.sin(a)*S*1.2,
+        life:0.45+R()*0.35+S/120,size:S*(0.35+R()*0.3),age:-delay-R()*0.08});
+    }
+    const np=2+(S/6|0);
+    for(let i=0;i<np;i++){
+      fx({kind:'plume',x:x+(R()-0.5)*S*0.6,y:y+S*0.4,z:z+(R()-0.5)*S*0.6,
+        vx:3+R()*4,vy:12+R()*10+S*0.3,vz:-2+R()*2,
+        life:2.2+R()*1.4+S/25,size:S*(0.35+R()*0.2),age:-delay-0.12-R()*0.25});
+    }
+    if(S>=8)for(let i=0;i<3;i++)fx({kind:'dust',x:x+(R()-0.5)*S,y:y+2,z:z+(R()-0.5)*S,
+      vx:(R()-0.5)*20,vy:4,vz:(R()-0.5)*20,life:1+R()*0.6,size:S*0.5,age:-delay});
+    const nd=S>=12?3+(S/5|0):(R()<0.5?1:0);
+    for(let i=0;i<nd;i++)chunk(x,y+S*0.3,z,S,delay);
+    groundFx('glow',x,z,S*3.2,0.32,delay);
+    if(S>=8)groundFx('ring',x,z,S,0.42,delay);
+  }
+  /* debris: small dark chunks on ballistic arcs that bounce once and settle */
+  const debris=[], debrisPool=[];
+  function chunk(x,y,z,S,delay){
+    if(debris.length>120)return;
+    let m=debrisPool.pop();
+    if(!m){ m=new THREE.Mesh(G_BOX,M(IRON,true)); m.castShadow=true; }
+    const a=Math.random()*6.28, sp=18+Math.random()*32+S*1.1, k=0.9+Math.random()*(S/12);
+    m.scale.set(k*1.6,k,k*1.2); m.position.set(x,y,z); m.visible=false; fx_group.add(m);
+    debris.push({m,vx:Math.cos(a)*sp,vy:50+Math.random()*70+S*2,vz:Math.sin(a)*sp,
+      rx:(Math.random()-0.5)*14,rz:(Math.random()-0.5)*14,age:-delay,life:1.6+Math.random()*0.8,bounced:false});
+  }
+  function updateDebris(dt){
+    for(let i=debris.length-1;i>=0;i--){
+      const d=debris[i]; d.age+=dt;
+      if(d.age<0)continue;
+      if(d.age>=d.life){ fx_group.remove(d.m); debrisPool.push(d.m); debris[i]=debris[debris.length-1]; debris.pop(); continue; }
+      const p=d.m.position;
+      p.x+=d.vx*dt; p.y+=d.vy*dt; p.z+=d.vz*dt; d.vy-=320*dt;
+      d.m.rotation.x+=d.rx*dt; d.m.rotation.z+=d.rz*dt;
+      const gy=groundH(p.x,p.z);
+      if(p.y<gy){ p.y=gy;
+        if(!d.bounced){ d.bounced=true; d.vy*=-0.3; d.vx*=0.4; d.vz*=0.4; d.rx*=0.4; d.rz*=0.4; }
+        else { d.vx=d.vz=d.vy=0; d.rx=d.rz=0; }
+      }
+      if(d.age>d.life-0.4)d.m.scale.multiplyScalar(1-dt*4);
+    }
+  }
+  /* ground-hugging light: a glow disc and a shock ring, flat on the terrain */
+  const TEX_RING=(()=>{
+    const c=mkCan(128,128), x=c.getContext('2d'), g=x.createRadialGradient(64,64,34,64,64,62);
+    g.addColorStop(0,'rgba(255,220,170,0)'); g.addColorStop(0.55,'rgba(255,230,190,0.9)'); g.addColorStop(1,'rgba(255,200,140,0)');
+    x.fillStyle=g; x.fillRect(0,0,128,128);
+    const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace; return t;
+  })();
+  const groundList=[], groundPool=[];
+  const G_DECAL=new THREE.PlaneGeometry(1,1).rotateX(-Math.PI/2);
+  function groundFx(kind,x,z,size,life,delay){
+    let m=groundPool.pop();
+    if(!m){
+      m=new THREE.Mesh(G_DECAL,new THREE.MeshBasicMaterial({transparent:true,depthWrite:false,
+        blending:THREE.AdditiveBlending,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2}));
+      m.renderOrder=2;
+    }
+    m.material.map=kind==='ring'?TEX_RING:TEX_FIRE; m.material.needsUpdate=true;
+    m.position.set(x,groundH(x,z)+1.2,z); m.visible=false; fx_group.add(m);
+    groundList.push({m,kind,size,life,age:-delay});
+  }
+  function updateGroundFx(dt){
+    for(let i=groundList.length-1;i>=0;i--){
+      const g=groundList[i]; g.age+=dt;
+      if(g.age>=g.life){ fx_group.remove(g.m); groundPool.push(g.m); groundList[i]=groundList[groundList.length-1]; groundList.pop(); continue; }
+      if(g.age<0){ g.m.visible=false; continue; }
+      const f=g.age/g.life; g.m.visible=true;
+      const k=g.kind==='ring'?g.size*(1+f*4.5):g.size*(0.8+f*0.4);
+      g.m.scale.set(k,1,k);
+      g.m.material.opacity=g.kind==='ring'?(1-f)*0.8:(1-f)*(1-f)*0.9;
+      g.m.material.color.setRGB(1,g.kind==='ring'?0.9:0.62,g.kind==='ring'?0.75:0.3);
+    }
+  }
+
+  /* ---- wrecks ----
+     A destroyed vehicle leaves its hull: charred black, lights out, burning
+     and smoking for a few seconds before it settles into the ground. A
+     destroyed structure slumps into burning rubble on its foundation. The
+     view is simply kept after the sim drops the entity, re-skinned, and
+     de-registered from picking. */
+  const wrecks=[], charMats=new Map();
+  function charOf(mat){
+    if(!charMats.has(mat.uuid)){
+      const m=new THREE.MeshPhongMaterial({color:col('#262320'),flatShading:!!mat.flatShading,shininess:4,specular:col('#0c0c0c')});
+      charMats.set(mat.uuid,surfaceify(shroudify(m),SURF_PLATE,!!(mat.userData&&mat.userData.baked)));
+    }
+    return charMats.get(mat.uuid);
+  }
+  function makeWreck(v,isB){
+    v.userData.eid=undefined;
+    v.traverse(o=>{
+      if(!o.isMesh)return;
+      if(o.material.isMeshBasicMaterial){ o.visible=false; return; }   // lamps, windows, flash shell
+      o.material=charOf(o.material);
+    });
+    if(v.userData.tur&&!isB){ v.userData.tur.rotation.y+=(Math.random()-0.5)*1.2; v.userData.tur.rotation.z=0.12; }
+    v.userData.wreck={age:0,life:isB?22:7,isB,puffT:0,y0:v.position.y,r:(v.userData.hitR||14)};
+    wrecks.push(v);
+  }
+  function updateWrecks(dt){
+    for(let i=wrecks.length-1;i>=0;i--){
+      const v=wrecks[i], w=v.userData.wreck; w.age+=dt;
+      if(w.age>=w.life){ entities.remove(v); wrecks[i]=wrecks[wrecks.length-1]; wrecks.pop(); continue; }
+      if(w.isB)v.scale.y=Math.max(0.3,1-w.age*1.1);                     // slump onto the foundation
+      const sink=Math.max(0,w.age-(w.life-2.5))/2.5;
+      v.position.y=w.y0-sink*(w.isB?14:9);
+      w.puffT-=dt;
+      if(w.puffT<=0&&w.age<w.life*0.8){
+        w.puffT=w.isB?0.12:0.2;
+        const x=v.position.x+(Math.random()-0.5)*w.r, z=v.position.z+(Math.random()-0.5)*w.r;
+        const y=w.y0+(w.isB?10:6);
+        puff(x,y,z,'soot',w.isB?9:5);
+        if(Math.random()<(w.age<w.life*0.5?0.9:0.4))puff(x,y,z,'fire',w.isB?7:4);
+      }
     }
   }
   function syncBuildings(dt){
@@ -4533,7 +4681,9 @@ float groundOre;
     }
     for(const [id,v] of bView){
       if(live.has(id))continue;
-      entities.remove(v); bView.delete(id);
+      bView.delete(id);
+      if(!buildings.some(b=>b.id===id))makeWreck(v,true);
+      else entities.remove(v);
     }
   }
   function syncUnits(dt){
@@ -4587,7 +4737,11 @@ float groundOre;
     }
     for(const [id,v] of uView){
       if(live.has(id))continue;
-      entities.remove(v); uView.delete(id);
+      uView.delete(id);
+      /* gone from the sim entirely (not merely out of sight): a kill */
+      const dead=!units.some(u=>u.id===id);
+      if(dead&&!v.userData.legs&&!v.userData.rotor)makeWreck(v,false);
+      else entities.remove(v);
     }
   }
 
@@ -4604,7 +4758,7 @@ float groundOre;
   const TEX_FIRE=radialTex([[0,'rgba(255,246,220,1)'],[0.32,'rgba(255,170,60,0.92)'],
                             [0.72,'rgba(200,60,20,0.38)'],[1,'rgba(120,30,10,0)']]);
   const TEX_SOFT=radialTex([[0,'rgba(255,255,255,0.85)'],[0.5,'rgba(255,255,255,0.28)'],[1,'rgba(255,255,255,0)']]);
-  const fx=new THREE.Group(); scene.add(fx);
+  const fx_group=new THREE.Group(); scene.add(fx_group);
   const spritePool=[], linePool=[];
   function takeSprite(tex,blend){
     let s=spritePool.pop();
@@ -4617,9 +4771,9 @@ float groundOre;
     if(s.material.map!==tex||s.material.blending!==blend){
       s.material.map=tex; s.material.blending=blend; s.material.needsUpdate=true;
     }
-    s.visible=true; fx.add(s); return s;
+    s.visible=true; fx_group.add(s); return s;
   }
-  function freeSprite(s){ fx.remove(s); spritePool.push(s); }
+  function freeSprite(s){ fx_group.remove(s); spritePool.push(s); }
   function takeLine(){
     let l=linePool.pop();
     if(!l){
@@ -4629,9 +4783,9 @@ float groundOre;
         blending:THREE.AdditiveBlending}));
       l.frustumCulled=false;
     }
-    l.visible=true; fx.add(l); return l;
+    l.visible=true; fx_group.add(l); return l;
   }
-  function freeLine(l){ fx.remove(l); linePool.push(l); }
+  function freeLine(l){ fx_group.remove(l); linePool.push(l); }
   const liveSprites=[], liveLines=[];
   function recycle(){
     while(liveSprites.length)freeSprite(liveSprites.pop());
@@ -4663,17 +4817,18 @@ float groundOre;
       }
     }
     for(const e of explosions){
-      if(e.life<0)continue;
-      const f=e.life/e.max, r=Math.max(2,e.size*(0.5+2.1*Math.sqrt(f)));
-      const s=takeSprite(TEX_FIRE,THREE.AdditiveBlending); liveSprites.push(s);
-      s.position.set(e.x,groundH(e.x,e.y)+r*0.55,e.y);
-      s.scale.set(r*2.2,r*2.2,1);
-      s.material.opacity=Math.max(0,1-f);
-      s.material.color.setRGB(1,1,1);
+      if(seenBoom.has(e))continue;
+      seenBoom.add(e);
+      burst(e.x,e.y,e.size,Math.max(0,-e.life));
+    }
+    for(const p of projectiles){                   // rockets leave a smoke trail
+      if(p.kind!=='rocket'||Math.random()<0.4)continue;
+      const f=Math.min(1,p.t/p.dur), x=p.x+(p.tx-p.x)*f, z=p.y+(p.ty-p.y)*f;
+      fx({kind:'gunsmoke',x,y:Math.max(groundH(x,z),groundH(p.x,p.y))+16,z,vy:3,life:0.9,size:2.6});
     }
     for(const p of particles){
       const a=Math.max(0,p.life/p.max);
-      if(p.kind==='text')continue;                 // floating text belongs on the HUD
+      if(p.kind==='text'||p.kind==='debris')continue;   // text is HUD; debris is modelled (chunk)
       const s=takeSprite(p.kind==='smoke'?TEX_SOFT:TEX_FIRE,
         p.kind==='smoke'?THREE.NormalBlending:THREE.AdditiveBlending);
       liveSprites.push(s);
@@ -4694,13 +4849,20 @@ float groundOre;
     }
     /* muzzle flashes, taken from whatever is mid-shot this frame */
     const flash=(ent,view,ang)=>{
+      const prev=lastMuzzle.get(ent)||0; lastMuzzle.set(ent,ent.muzzle||0);
       if(!(ent.muzzle>0)||!view||!view.userData.muzzle)return;
       const m=view.userData.muzzle.clone();
       const tur=view.userData.tur;
       if(tur)m.applyEuler(new THREE.Euler(0,tur.rotation.y,0));
       m.applyEuler(new THREE.Euler(0,-ang,0));
+      const mx=view.position.x+m.x, my=view.position.y+m.y, mz=view.position.z+m.z;
+      if(ent.muzzle>prev+0.01){                      // a new shot, not the same flash fading
+        const big=(view.userData.hitR||10)>12;
+        fx({kind:'gunsmoke',x:mx,y:my,z:mz,vx:(m.x)*0.4,vy:5,vz:(m.z)*0.4,life:big?1.4:0.8,size:big?4.5:2});
+        if(big)fx({kind:'dust',x:mx,y:groundH(mx,mz)+2,z:mz,vx:m.x*0.3,vy:2,vz:m.z*0.3,life:0.9,size:6});
+      }
       const s=takeSprite(TEX_FIRE,THREE.AdditiveBlending); liveSprites.push(s);
-      s.position.set(view.position.x+m.x,view.position.y+m.y,view.position.z+m.z);
+      s.position.set(mx,my,mz);
       const sc=9+ent.muzzle*22; s.scale.set(sc,sc,1);
       s.material.opacity=Math.min(1,ent.muzzle*4);
       s.material.color.setStyle('#ffdca0');
