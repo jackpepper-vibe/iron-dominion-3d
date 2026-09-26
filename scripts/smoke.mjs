@@ -251,6 +251,36 @@ check('entity views track the sim through churn',
   churn.views <= churn.after.b + churn.after.u,
   `${churn.views} views for ${churn.after.b}+${churn.after.u} entities`);
 
+/* ---- base management: repair costs credits, sell refunds and frees the ground ---- */
+const mgmt = await page.evaluate(() => {
+  const S = ID3.sim;
+  const pw = S.buildings.find(b => b.owner === S.PLAYER && b.type === 'power');
+  pw.hp = pw.maxhp * 0.5;
+  const c0 = S.credits[0];
+  S.setRepair(pw, true);
+  ID3.step(60, 1 / 30);                                  // two seconds
+  const repaired = { hp: pw.hp / pw.maxhp, spent: c0 - S.credits[0] };
+  const c1 = S.credits[0], n0 = S.units.filter(u => u.owner === 0).length;
+  const refund = S.sellBuilding(pw);
+  return { repaired, refund, gained: S.credits[0] - c1, gone: !S.buildings.includes(pw),
+           crew: S.units.filter(u => u.owner === 0).length - n0 };
+});
+check('repair restores HP and spends credits',
+  mgmt.repaired.hp > 0.55 && mgmt.repaired.spent > 0, `${(mgmt.repaired.hp * 100).toFixed(0)}% for $${mgmt.repaired.spent.toFixed(0)}`);
+check('sell refunds, removes the structure and its crew walks out',
+  mgmt.refund > 0 && mgmt.gained === mgmt.refund && mgmt.gone,
+  `+$${mgmt.refund}, ${mgmt.crew} crew`);
+
+/* ---- rally: a facility's new units head for its flag ---- */
+const rally = await page.evaluate(() => {
+  const S = ID3.sim;
+  const b = ID3.build(0, 'barracks', 20, S.MAPH - 20);
+  S.setRally(b, 30 * S.TILE, (S.MAPH - 30) * S.TILE);
+  const u = S.spawnUnitAt(0, 'trooper', b);
+  return { d: u.dest ? Math.hypot(u.dest[0] - b.rally[0], u.dest[1] - b.rally[1]) : 1e9 };
+});
+check('units from a facility go to its rally point', rally.d < 40, `${rally.d.toFixed(0)} units from the flag`);
+
 /* ---- save / restore survives the new camera semantics ---- */
 const save = await page.evaluate(() => {
   const S = ID3.sim;

@@ -54,9 +54,23 @@
   @keyframes evain{from{opacity:0;transform:scaleX(.6)}to{opacity:1;transform:scaleX(1)}}
 
   /* selection info strip */
-  #selinfo{position:absolute;left:10px;bottom:10px;background:rgba(10,12,14,.8);
+  /* bottom-left: what is selected, then what it can be told to do */
+  #selbox{position:absolute;left:10px;bottom:10px;display:flex;flex-direction:column;gap:5px;
+    align-items:flex-start;z-index:5;pointer-events:none}
+  #selinfo{background:rgba(10,12,14,.8);
     border:1px solid #3a3f46;padding:5px 10px;font-size:12px;color:var(--green);
     letter-spacing:1px;display:none;pointer-events:none;max-width:340px}
+  #actbar{display:none;gap:5px;pointer-events:auto}
+  #actbar button{font-family:inherit;font-size:10px;letter-spacing:2px;padding:6px 11px;min-height:28px;
+    background:rgba(10,12,14,.86);color:var(--amber);border:1px solid var(--gold-dim);cursor:pointer}
+  #actbar button:hover:not(:disabled){background:#2a2e35;border-color:var(--gold);color:#fff}
+  #actbar button:disabled{opacity:.4;cursor:default}
+  #actbar button.on{background:var(--green);color:#0d1512;border-color:#8cf0cf}
+  #actbar button.sell{color:#e08a6e;border-color:#7a3a2c}
+  #actbar button.sell:hover{background:#3a201a;border-color:var(--red);color:#fff}
+  #actbar .hint{font-size:9px;letter-spacing:1px;color:#8b929b;align-self:center;
+    background:rgba(10,12,14,.8);padding:4px 8px;border:1px solid #2c3036}
+  #actbar kbd{font-family:inherit;color:#6d737b;margin-left:4px}
   #selinfo .sihead{color:var(--gold);font-size:12px}
   #selinfo .sidesc{color:#9aa3ad;font-size:10px;letter-spacing:.4px;margin-top:2px;line-height:1.35}
   #selinfo .sistat{font-size:11px;margin-top:3px}
@@ -258,7 +272,7 @@
     <canvas id="view"></canvas>
     <canvas id="hud"></canvas>
     <div id="eva"></div>
-    <div id="selinfo"></div>
+    <div id="selbox"><div id="selinfo"></div><div id="actbar"></div></div>
     <div id="hovertip"></div>
     <div id="battlectl">
       <button id="edgebtn" title="Toggle edge-of-screen map scrolling (E)">EDGE SCROLL: OFF</button>
@@ -288,6 +302,7 @@
         &bull; <b>P</b> or <b>Space</b>: pause / resume (auto-pauses if you switch away)<br>
         &bull; <b>E</b> or the top-right button: toggle edge-of-screen scrolling (off by default)<br>
         &bull; Ctrl+1-5: assign group &nbsp;&bull; 1-5: recall group &nbsp;&bull; Right-click icon: cancel &amp; refund<br>
+        &bull; Selected building: <b>R</b> repair &nbsp;&bull; <b>X</b> sell &nbsp;&bull; right-click ground sets a factory's rally point<br>
         &bull; Keep power (green bar) above demand or production slows and radar fails.
       </div>
       </div>
@@ -1919,9 +1934,7 @@ function killEntity(ent){
     units.splice(units.indexOf(ent),1);
     selection=selection.filter(s=>s!==ent);
   }else{
-    for(let dy=0;dy<ent.h;dy++)for(let dx=0;dx<ent.w;dx++)occ[idx(ent.tx+dx,ent.ty+dy)]=0;
-    buildings.splice(buildings.indexOf(ent),1);
-    if(selectedBuilding===ent)selectedBuilding=null;
+    removeBuilding(ent);
     if(ent.owner===PLAYER)eva(BDEFS[ent.type].name+' lost');
   }
   checkVictory();
@@ -1947,6 +1960,80 @@ function boom(x,y,size){
   // camX/camY are the point the camera is looking at now, so proximity is radial
   if(Math.hypot(x-camX,y-camY)<R3D.dist*1.1)shake=Math.min(10,shake+size*0.18);
   beep(70+Math.random()*40,0.25,'sawtooth',0.16);
+}
+
+/* ================= SELL / REPAIR / RALLY =================
+   Command & Conquer's base-management verbs. Repair spends credits as it
+   restores hit points (a full repair costs half the structure's price) and
+   pauses while the treasury is dry; selling refunds half the structure's
+   price, scaled by its condition, and — as in C&C — a few of the crew walk
+   out of a large building. A rally point sends a facility's new units
+   somewhere useful instead of leaving them in its doorway. */
+const REPAIR_RATE=0.07;          // share of max HP restored per second
+const REPAIR_COST=0.5;           // a full repair costs this share of the price
+const SELL_REFUND=0.5;           // a pristine structure sells for this share
+let soldIds=new Set();           // renderer reads it: a sold structure leaves no rubble
+function valueOf(type){ return BDEFS[type].cost||3000; }   // the yard is priceless on the sidebar, not in the ledger
+function canRepair(b){ return b&&b.hp>0&&b.built>=1&&b.hp<b.maxhp; }
+function setRepair(b,on){
+  if(!b)return false;
+  on=on&&canRepair(b);
+  if(!!b.repairing===on)return false;
+  b.repairing=on;
+  if(b.owner===PLAYER){eva(on?'Repairing':'Repair halted');beep(on?560:300,0.07,'square',0.06);}
+  return true;
+}
+function updateRepairs(dt){
+  for(const b of buildings){
+    if(!b.repairing)continue;
+    if(b.hp>=b.maxhp){b.repairing=false;continue;}
+    const heal=Math.min(b.maxhp-b.hp,b.maxhp*REPAIR_RATE*dt);
+    const cost=valueOf(b.type)*REPAIR_COST*heal/b.maxhp;
+    if(credits[b.owner]<cost)continue;          // waits for funds, like a starved queue
+    credits[b.owner]-=cost; b.hp+=heal;
+  }
+}
+/* Take a structure off the map without a death: shared by selling, capture
+   hand-overs that must re-register, and killEntity. */
+function removeBuilding(b){
+  for(let dy=0;dy<b.h;dy++)for(let dx=0;dx<b.w;dx++)if(occ[idx(b.tx+dx,b.ty+dy)]===b.id)occ[idx(b.tx+dx,b.ty+dy)]=0;
+  const i=buildings.indexOf(b); if(i>=0)buildings.splice(i,1);
+  if(selectedBuilding===b)selectedBuilding=null;
+}
+function sellBuilding(b){
+  if(!b||b.hp<=0||!buildings.includes(b))return 0;
+  const refund=Math.round(valueOf(b.type)*SELL_REFUND*Math.max(0,b.hp)/b.maxhp);
+  credits[b.owner]+=refund;
+  soldIds.add(b.id);
+  removeBuilding(b);
+  /* the crew: one trooper per thousand of the structure's value, at most three */
+  const crew=BDEFS[b.type].barrier?0:Math.min(3,Math.floor(valueOf(b.type)/1000));
+  for(let i=0;i<crew;i++){
+    const u=spawnUnitAt(b.owner,'trooper',b);
+    u.hp=Math.round(u.maxhp*(0.5+Math.random()*0.5));
+  }
+  for(let i=0;i<10;i++)particles.push({x:b.x+(Math.random()-0.5)*b.w*TILE,y:b.y+(Math.random()-0.5)*b.h*TILE,
+    vx:(Math.random()-0.5)*12,vy:-8-Math.random()*10,life:1.2,max:1.2,size:6,grow:9,c:'120,112,96',kind:'smoke'});
+  if(b.owner===PLAYER){
+    particles.push({x:b.x,y:b.y-10,vx:0,vy:-16,life:1.3,max:1.3,size:11,c:'#ffd76e',txt:'+$'+refund,kind:'text'});
+    eva('Structure sold');beep(620,0.08,'square',0.07);
+  }
+  checkVictory();
+  return refund;
+}
+const RALLY_FROM=new Set(['barracks','factory']);
+function setRally(b,px,py){
+  if(!b||!RALLY_FROM.has(b.type))return false;
+  b.rally=[Math.max(8,Math.min(WORLD-8,px)),Math.max(8,Math.min(WORLD-8,py))];
+  if(b.owner===PLAYER){eva('Rally point set');beep(700,0.05,'square',0.05);}
+  return true;
+}
+/* Where a fresh unit from `b` should head: its rally point, or just clear of the door. */
+function sendToRally(u,b,fallbackX,fallbackY){
+  if(b.rally&&u.type!=='harvester'){
+    const j=()=>(Math.random()-0.5)*TILE*0.8;          // a loose knot, not one stacked point
+    orderMove(u,b.rally[0]+j(),b.rally[1]+j());
+  } else orderMove(u,fallbackX,fallbackY);
 }
 
 /* ================= POWER ================= */
@@ -2519,8 +2606,8 @@ function spawnUnitAt(owner,type,b){
       if(dx>=0&&dx<b.w&&dy>=0&&dy<b.h)continue;
       if(passable(tx,ty)){
         const u=addUnit(owner,type,(tx+0.5)*TILE,(ty+0.5)*TILE);
-        // rally slightly outward
-        orderMove(u,u.x+(tx-b.tx-b.w/2)*8,u.y+TILE*1.5);
+        // to the rally point, or slightly outward
+        sendToRally(u,b,u.x+(tx-b.tx-b.w/2)*8,u.y+TILE*1.5);
         return u;
       }
     }
@@ -2543,7 +2630,7 @@ function spawnFromDoor(owner,type,b){
   if(!passable(b.tx+(b.w>>1),b.ty+b.h))return spawnUnitAt(owner,type,b); // doorway blocked
   const u=addUnit(owner,type,mx,my-4);
   u.angle=Math.PI/2; u.turAngle=Math.PI/2;   // facing out of the door
-  orderMove(u,mx+(Math.random()-0.5)*12,my+TILE*1.7);
+  sendToRally(u,b,mx+(Math.random()-0.5)*12,my+TILE*1.7);
   for(let i=0;i<6;i++)particles.push({x:mx+(Math.random()-0.5)*14,y:my+2,
     vx:(Math.random()-0.5)*22,vy:8+Math.random()*14,life:0.4,max:0.4,size:2.5,grow:5,c:'85,82,74',kind:'smoke'});
   return u;
@@ -2649,6 +2736,9 @@ function updateAI(dt){
       credits[ENEMY]-=UDEFS.harvester.cost;produceUnit(ENEMY,'harvester',factory);
     }
   }
+  // upkeep: the enemy repairs damaged structures while it can afford to
+  if(tick%90===45)for(const b of buildings)
+    if(b.owner===ENEMY&&b.hp<b.maxhp*0.7&&credits[ENEMY]>400)setRepair(b,true);
   // waves
   ai.nextWave-=dt;
   if(ai.nextWave<=0){
@@ -2719,6 +2809,10 @@ window.addEventListener('keydown',e=>{
   if(paused&&e.key!=='Escape')return;    // no orders or hotkeys while frozen
   if(e.key==='Escape'){selection=[];selectedBuilding=null;placing=null;}
   if(e.key.toLowerCase()==='c')scanOn=!scanOn;
+  /* building verbs on the selected structure */
+  const sb=selectedBuilding&&selectedBuilding.owner===PLAYER?selectedBuilding:null;
+  if(sb&&e.key.toLowerCase()==='r'&&started&&!gameOver){setRepair(sb,!sb.repairing);refreshActions(true);}
+  if(sb&&e.key.toLowerCase()==='x'&&started&&!gameOver){sellBuilding(sb);refreshActions(true);}
   if(e.key.toLowerCase()==='e')setEdgeScroll(!edgeScroll);
   const n=parseInt(e.key);
   if(n>=1&&n<=5){
@@ -2742,7 +2836,15 @@ function groundUnder(mx,my){
 function rightClickOrder(mx,my){
   if(paused)return;   // no orders while frozen
   if(placing){placing=null;return;}
-  if(!selection.length)return;
+  if(!selection.length){
+    /* a production facility selected on its own: right-click sets its rally point */
+    const b=selectedBuilding;
+    if(b&&b.owner===PLAYER&&RALLY_FROM.has(b.type)){
+      const {wx,wy}=groundUnder(mx,my);
+      if(setRally(b,wx,wy))particles.push({x:wx,y:wy,vx:0,vy:0,life:0.3,max:0.3,size:9,c:'#ffd76e',kind:'ring'});
+    }
+    return;
+  }
   const {wx,wy}=groundUnder(mx,my);
   const tgt=entityAt(mx,my,ENEMY);
   const movers=selection.filter(u=>u.hp>0);
@@ -4682,7 +4784,7 @@ float groundOre;
     for(const [id,v] of bView){
       if(live.has(id))continue;
       bView.delete(id);
-      if(!buildings.some(b=>b.id===id))makeWreck(v,true);
+      if(!buildings.some(b=>b.id===id)&&!soldIds.has(id))makeWreck(v,true);
       else entities.remove(v);
     }
   }
@@ -5102,7 +5204,11 @@ function render(dt){
     ctx.stroke();
     drawHealth(b.x-r,b.y-r-8,r*2,u.hp/u.maxhp);
   }
-  if(selectedBuilding&&selectedBuilding.hp>0)drawBuildingBrackets(selectedBuilding);
+  if(selectedBuilding&&selectedBuilding.hp>0){
+    drawBuildingBrackets(selectedBuilding);
+    if(selectedBuilding.rally&&selectedBuilding.owner===PLAYER)drawRally(selectedBuilding);
+  }
+  for(const b of buildings)if(b.repairing&&explored[idx(b.tx,b.ty)])drawRepairMark(b);
   const hov=entityAt(mouse.x,mouse.y,undefined);
   if(hov&&hov.hp>0){
     const b=hoverBox(hov);
@@ -5160,6 +5266,32 @@ function drawBuildingBrackets(b){
   const cx=(q[0].x+q[2].x)/2, top=Math.min(q[0].y,q[1].y,q[2].y,q[3].y);
   const wid=Math.max(30,Math.abs(q[1].x-q[0].x));
   drawHealth(cx-wid/2,top-11,wid,b.hp/b.maxhp);
+}
+/* The C&C repair wrench: pulses over a structure while it is being mended. */
+function drawRepairMark(b){
+  const p=R3D.project(b.x,R3D.groundH(b.x,b.y)+b.h*TILE*0.9+18,b.y);
+  if(p.z>1)return;
+  const a=0.85+0.15*Math.sin(performance.now()/180);
+  ctx.save(); ctx.globalAlpha=a; ctx.translate(p.x,p.y);
+  ctx.fillStyle='rgba(10,12,14,.75)'; ctx.beginPath(); ctx.arc(0,0,10,0,6.283); ctx.fill();
+  ctx.strokeStyle='#7cffa0'; ctx.lineWidth=2; ctx.stroke();
+  ctx.rotate(-0.78); ctx.fillStyle='#7cffa0';
+  ctx.fillRect(-1.6,-5,3.2,10);                              // handle
+  ctx.beginPath(); ctx.arc(0,-5,3.6,0,6.283); ctx.fill();    // jaw
+  ctx.fillStyle='rgba(10,12,14,1)'; ctx.fillRect(-1.2,-9,2.4,4.2);
+  ctx.restore();
+}
+/* A dashed leader from the facility to its rally flag. */
+function drawRally(b){
+  const a=R3D.project(b.x,R3D.groundH(b.x,b.y)+4,b.y), f=R3D.project(b.rally[0],R3D.groundH(b.rally[0],b.rally[1])+2,b.rally[1]);
+  if(a.z>1||f.z>1)return;
+  ctx.save();
+  ctx.setLineDash([5,4]); ctx.strokeStyle='rgba(255,215,110,.8)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(f.x,f.y); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle='#ffd76e'; ctx.beginPath(); ctx.moveTo(f.x,f.y); ctx.lineTo(f.x,f.y-18); ctx.stroke();
+  ctx.fillStyle='#ffd76e'; ctx.beginPath(); ctx.moveTo(f.x,f.y-18); ctx.lineTo(f.x+11,f.y-14); ctx.lineTo(f.x,f.y-10); ctx.fill();
+  ctx.restore();
 }
 function hoverBox(e){
   if(e.cls==='b'){
@@ -5273,6 +5405,46 @@ function updateHUD(){
     si.style.display='block';
     si.innerHTML=buildingInfoHTML(selectedBuilding);
   } else si.style.display='none';
+  refreshActions(false);
+}
+/* ---- action bar ----
+   The verbs available to whatever is selected. Rebuilt only when the thing it
+   describes changes (signature), so a button is never swapped out from under
+   a click the way the text readout above it is. */
+let actSig='';
+const ACTIONS=[];   // {when(ctx)->bool, button(ctx)->HTMLElement}; later features register here
+function actionContext(){
+  const b=selectedBuilding&&selectedBuilding.owner===PLAYER&&selectedBuilding.hp>0?selectedBuilding:null;
+  return {b, units:selection.filter(u=>u.hp>0&&u.owner===PLAYER)};
+}
+function actButton(label,key,cls,onClick,disabled){
+  const el=document.createElement('button'); el.type='button';
+  el.innerHTML=esc(label)+(key?'<kbd>'+key+'</kbd>':'');
+  if(cls)el.className=cls;
+  el.disabled=!!disabled;
+  el.addEventListener('click',e=>{e.stopPropagation();onClick();refreshActions(true);});
+  return el;
+}
+ACTIONS.push({
+  when:c=>!!c.b,
+  build:c=>[
+    actButton(c.b.repairing?'REPAIRING':'REPAIR','R',c.b.repairing?'on':'',()=>setRepair(c.b,!c.b.repairing),
+      !c.b.repairing&&!canRepair(c.b)),
+    actButton('SELL $'+Math.round(valueOf(c.b.type)*SELL_REFUND*c.b.hp/c.b.maxhp),'X','sell',()=>sellBuilding(c.b)),
+  ].concat(RALLY_FROM.has(c.b.type)?[Object.assign(document.createElement('span'),{className:'hint',
+    textContent:c.b.rally?'RALLY SET · RIGHT-CLICK TO MOVE':'RIGHT-CLICK GROUND TO SET RALLY'})]:[]),
+  sig:c=>'b'+c.b.id+(c.b.repairing?'r':'')+(canRepair(c.b)?'c':'')+Math.round(c.b.hp/c.b.maxhp*20)+(c.b.rally?'R':''),
+});
+function refreshActions(force){
+  const bar=document.getElementById('actbar');
+  if(!started||gameOver){ if(actSig){bar.replaceChildren();bar.style.display='none';actSig='';} return; }
+  const c=actionContext();
+  const live=ACTIONS.filter(a=>a.when(c));
+  const sig=live.map(a=>a.sig(c)).join('|');
+  if(sig===actSig&&!force)return;
+  actSig=sig;
+  bar.replaceChildren(...live.flatMap(a=>a.build(c)));
+  bar.style.display=live.length?'flex':'none';
 }
 /* ---- structure readout ---- */
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
@@ -5282,6 +5454,7 @@ function buildingInfoHTML(b){
   stats.push('<span>HP</span> '+Math.ceil(b.hp)+'/'+b.maxhp);
   if(d.power)stats.push('<span>POWER</span> '+(d.power>0?'+':'')+d.power);
   if(d.dmg)stats.push('<span>DMG</span> '+d.dmg+' <span>RNG</span> '+d.range.toFixed(1));
+  if(b.repairing)stats.push('<span style="color:var(--green)">REPAIRING</span>');
   if(mine){
     const tab=Object.keys(PRODUCER_OF).find(t=>PRODUCER_OF[t]===b.type);
     if(tab){
@@ -5431,7 +5604,7 @@ function placeSide(owner,cfg){
   }
 }
 function resetWorld(M){
-  buildings=[];units=[];projectiles=[];particles=[];explosions=[];rollouts=[];
+  buildings=[];units=[];projectiles=[];particles=[];explosions=[];rollouts=[];soldIds=new Set();
   selection=[];selectedBuilding=null;groups={};placing=null;nextId=1;
   queues={structure:[],infantry:[],vehicle:[]};
   gameOver=false;tick=0;shake=0;lowPower=false;lastAttackWarn=-999;
@@ -5681,7 +5854,8 @@ function serializeState(){
       explored:b64FromBytes(explored),
     },
     buildings:buildings.map(b=>({id:b.id,owner:b.owner,type:b.type,tx:b.tx,ty:b.ty,hp:b.hp,
-      built:b.built,turAngle:b.turAngle,cool:b.cool,target:tid(b.target),door:b.door,doorT:b.doorT,unload:b.unload||0})),
+      built:b.built,turAngle:b.turAngle,cool:b.cool,target:tid(b.target),door:b.door,doorT:b.doorT,unload:b.unload||0,
+      repairing:!!b.repairing,rally:b.rally||null})),
     units:units.map(u=>({id:u.id,owner:u.owner,type:u.type,x:u.x,y:u.y,hp:u.hp,angle:u.angle,
       turAngle:u.turAngle,order:u.order,target:tid(u.target),dest:u.dest,cool:u.cool,
       cargo:u.cargo,hstate:u.hstate,oreTile:u.oreTile,htimer:u.htimer,unloaded:u.unloaded,alt:u.alt,rotor:u.rotor})),
@@ -5697,7 +5871,7 @@ function restoreState(S){
   const ob=bytesFromB64(S.grids.ore); oreAmt=new Uint16Array(ob.buffer,0,MAPW*MAPH);
   explored=bytesFromB64(S.grids.explored);
   occ=new Int32Array(MAPW*MAPH); visible=new Uint8Array(MAPW*MAPH);
-  buildings=[];units=[];projectiles=[];particles=[];explosions=[];rollouts=[];
+  buildings=[];units=[];projectiles=[];particles=[];explosions=[];rollouts=[];soldIds=new Set();
   selection=[];selectedBuilding=null;placing=null;shake=0;
   const byId=new Map();
   for(const s of S.buildings){
@@ -5705,7 +5879,8 @@ function restoreState(S){
     const b={id:s.id,cls:'b',owner:s.owner,type:s.type,tx:s.tx,ty:s.ty,w:d.w,h:d.h,
       hp:s.hp,maxhp:d.hp,x:(s.tx+d.w/2)*TILE,y:(s.ty+d.h/2)*TILE,
       cool:s.cool||0,turAngle:s.turAngle||0,target:null,flash:0,built:s.built??1,
-      recoil:0,muzzle:0,door:s.door||0,doorT:s.doorT||0,unload:s.unload||0,_t:s.target};
+      recoil:0,muzzle:0,door:s.door||0,doorT:s.doorT||0,unload:s.unload||0,_t:s.target,
+      repairing:!!s.repairing,rally:s.rally||null};
     for(let dy=0;dy<d.h;dy++)for(let dx=0;dx<d.w;dx++)occ[idx(s.tx+dx,s.ty+dy)]=b.id;
     buildings.push(b); byId.set(b.id,b);
   }
@@ -5946,7 +6121,7 @@ window.ID3={
     return !!e;
   },
   step(n,dt){ for(let i=0;i<n;i++){ tick++; for(const u of units)updateUnit(u,dt||STEP);
-    for(const b of buildings)updateBuilding(b,dt||STEP); updateProjectiles(dt||STEP); } updateFog(); },
+    for(const b of buildings)updateBuilding(b,dt||STEP); updateProjectiles(dt||STEP); updateRepairs(dt||STEP); } updateFog(); },
   spawn(owner,type,tx,ty){ return addUnit(owner,type,(tx+0.5)*TILE,(ty+0.5)*TILE); },
   build(owner,type,tx,ty){ const b=addBuilding(owner,type,tx,ty); b.built=1; return b; },
   theme(i){ return R3D.setTheme(i); },
@@ -5965,6 +6140,9 @@ window.ID3={
     get camY(){ return camY; },           set camY(v){ camY=v; },
     canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
     Campaign, showBoard, showBriefing,
+    setRepair, sellBuilding, setRally, spawnUnitAt, refreshActions,
+    get credits(){ return credits; }, get selectedBuilding(){ return selectedBuilding; },
+    set selectedBuilding(v){ selectedBuilding=v; },
   },
 };
 
@@ -5998,6 +6176,7 @@ function loop(ts){
       for(const b of buildings)updateBuilding(b,STEP);
       updateProjectiles(STEP);
       updateQueues(STEP);
+      updateRepairs(STEP);
       updateRollouts(STEP);
       updateAI(STEP);
       shake*=0.85;
