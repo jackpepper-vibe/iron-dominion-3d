@@ -38,6 +38,48 @@ const check = (name, pass, detail = '') => {
 
 await page.goto(`${server.origin}/index.html`);
 await page.waitForFunction('typeof ID3 === "object"');
+
+/* ---- campaign board: only unlocked missions show, and progress persists ----
+   Reached the way a player reaches it: click through the title card. */
+const passSplash = async () => {
+  await page.locator('#splash').click();
+  await page.waitForFunction(() => getComputedStyle(document.getElementById('splash')).display === 'none');
+};
+await passSplash();
+const cardCount = () => page.evaluate(() => document.querySelectorAll('#missions .mcard').length);
+const fresh = await page.evaluate(() => ({
+  cards: document.querySelectorAll('#missions .mcard').length,
+  boardShown: !document.getElementById('board').hidden,
+}));
+check('fresh commander sees only mission 1', fresh.boardShown && fresh.cards === 1,
+  `${fresh.cards} card(s), board ${fresh.boardShown ? 'shown' : 'hidden'}`);
+
+const won = await page.evaluate(() => {
+  const S = ID3.sim;
+  const opened = S.Campaign.recordClear(0, 2);
+  S.showBoard();
+  const cards = [...document.querySelectorAll('#missions .mcard')];
+  return { opened, cards: cards.length, badge: cards[0].querySelector('.mc-badge').textContent };
+});
+check('a victory unlocks the next mission and badges the cleared one',
+  won.opened && won.cards === 2 && /CLEARED.*HARD/.test(won.badge), `${won.cards} cards, "${won.badge}"`);
+
+await page.locator('#missions .mcard').nth(1).click();
+const brief = await page.evaluate(() => ({
+  briefing: !document.getElementById('briefing').hidden,
+  code: document.getElementById('mcode').textContent,
+  want: 'OPERATION EMBER · PHASE II',
+}));
+check('clicking a card opens that mission\'s briefing', brief.briefing && brief.code === brief.want, brief.code);
+
+const locked = await page.evaluate(() => { ID3.sim.showBriefing(7); return document.getElementById('mcode').textContent; });
+check('a locked mission cannot be briefed', !/PHASE III$/.test(locked) && /PHASE II$/.test(locked), locked);
+
+await page.reload();
+await page.waitForFunction('typeof ID3 === "object"');
+await passSplash();
+check('progress survives a reload', await cardCount() === 2, `${await cardCount()} cards after reload`);
+
 await page.evaluate(() => {
   document.getElementById('splash').style.display = 'none';
   document.getElementById('intro').style.display = 'none';

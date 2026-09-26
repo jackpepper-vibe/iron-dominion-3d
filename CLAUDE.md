@@ -111,6 +111,17 @@ node C:/Claude/Tools/shot/shot.mjs http://localhost:5173/index.html --viewport 1
 rewrote every path between pointer and simulation, and none of it shows up in a
 screenshot.
 
+## Campaign progress
+
+`Campaign` (in index.html) is the only owner of unlocks. It persists
+`ironDominion.progress.v2` = `{cleared, best[], difficulty}`: a *count* of
+missions cleared in order (never a set of ids, so a bad record cannot skip
+ahead) plus the best threat level each was won on. A v1 record
+(`{missionMax}`) is migrated on first load. The mission board shows unlocked
+missions only; `showBriefing()` refuses a locked index. Each mission's board
+card reads `name`, `blurb`, `code` (operation · phase) and `objType` from
+`MISSIONS`, so a new mission needs all four.
+
 ## What is still 2D on purpose
 
 - **Sidebar icons.** `makeBuildingSprite()` and the vehicle sprite painters are

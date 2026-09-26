@@ -94,10 +94,56 @@
   #overlay button:hover{background:#3a3f47}
 
   /* intro screen */
-  #intro{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    flex-direction:column;background:#0a0b0d;z-index:30;text-align:center;padding:20px}
-  #intro h1{font-size:52px;letter-spacing:12px;color:var(--gold);margin-bottom:6px;
+  /* Scrolls rather than clips when the board outgrows a short window; the
+     stack's auto margins keep it centred whenever it does fit. */
+  /* Fixed, not absolute: it covers the sidebar too, whose empty radar and $0
+     mean nothing before a battle and would otherwise squeeze the board. */
+  #intro{position:fixed;inset:0;display:flex;flex-direction:column;overflow-y:auto;
+    background:#0a0b0d;z-index:30;text-align:center;padding:20px 16px}
+  #intro .istack{margin:auto;width:min(100%,860px);display:flex;flex-direction:column;align-items:center}
+  #intro section{display:flex;flex-direction:column;align-items:center;width:100%}
+  #intro section[hidden]{display:none}
+  #intro h1{font-size:clamp(26px,7vw,52px);letter-spacing:clamp(3px,1.6vw,12px);color:var(--gold);margin-bottom:6px;
     text-shadow:0 0 30px rgba(232,178,58,.35)}
+  /* ---- mission board ---- */
+  #boardhead{margin-bottom:8px}
+  #tally{font-size:10px;letter-spacing:3px;color:var(--green);margin-bottom:18px}
+  #missions{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr));
+    gap:10px;width:100%}
+  .mgroup{grid-column:1/-1;text-align:left;font-size:10px;letter-spacing:4px;color:#6d737b;
+    padding:8px 2px 5px;border-bottom:1px solid #2c3036}
+  .mgroup:not(:first-child){margin-top:10px}
+  .mcard{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:14px;
+    padding:12px 14px;font:inherit;text-align:left;color:var(--text);background:#101216;
+    border:1px solid #2c3036;cursor:pointer;transition:border-color .14s,background .14s}
+  .mcard:hover,.mcard:focus-visible{border-color:var(--gold);background:rgba(232,178,58,.07);outline:none}
+  .mcard:active{transform:translateY(1px)}
+  /* The mission to play next carries the gold, so it is found before it is read. */
+  .mcard.frontier{border-color:var(--gold-dim);box-shadow:inset 0 0 0 1px rgba(232,178,58,.14)}
+  .mc-no{font-size:22px;font-weight:bold;letter-spacing:1px;color:#5a616b}
+  .mcard.frontier .mc-no{color:var(--gold)}
+  .mcard.done .mc-no{color:var(--green);opacity:.8}
+  .mc-body{display:flex;flex-direction:column;gap:3px;min-width:0}
+  /* Badge rides the name row so the description gets the card's full width. */
+  .mc-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .mc-body strong{font-size:14px;letter-spacing:2px;color:#e6e9ec;font-weight:bold}
+  .mc-body em{font-style:normal;font-size:9px;letter-spacing:2px;color:var(--amber);opacity:.85}
+  .mc-blurb{font-size:11px;line-height:1.45;color:#8b929b}
+  .mc-badge{flex:none;font-size:9px;font-weight:bold;letter-spacing:2px;padding:3px 6px;
+    border:1px solid currentColor;white-space:nowrap}
+  .mc-badge.ready{color:var(--gold)}
+  .mc-badge.cleared{color:var(--green)}
+  #classified{font-size:10px;letter-spacing:2px;color:#5a616b;margin-top:16px;min-height:12px}
+  /* ---- briefing ---- */
+  .brow{display:flex;gap:12px;align-items:stretch;justify-content:center;flex-wrap:wrap}
+  /* Brief and controls side by side where there is room, so the launch
+     buttons land above the fold instead of under a column of text. */
+  .bcols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr));
+    gap:16px;width:100%;margin-bottom:22px;align-items:start}
+  .bcols .brief{max-width:none;margin-bottom:0}
+  #backbtn{font-family:inherit;font-size:12px;letter-spacing:3px;padding:0 22px;min-height:44px;
+    background:transparent;color:#8b929b;border:1px solid #3a3f47;cursor:pointer}
+  #backbtn:hover,#backbtn:focus-visible{border-color:#6d737b;color:#fff;outline:none}
   #intro h2{font-size:13px;letter-spacing:6px;color:#6d737b;margin-bottom:30px;font-weight:normal}
   #intro .brief{max-width:560px;font-size:13px;line-height:1.8;color:#9aa0a8;
     border:1px solid #2c3036;padding:18px 24px;margin-bottom:26px;text-align:left;background:#101216}
@@ -160,7 +206,6 @@
     border-top:2px solid var(--bevel-d);box-shadow:0 -1px 0 var(--bevel-l) inset}
   #helpline{padding:6px 10px;font-size:9px;line-height:1.6;color:#6d737b;border-top:1px solid #14161a}
   /* campaign */
-  #mselect{display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap;justify-content:center;max-width:560px}
   #dselect{display:flex;gap:6px;margin:0 0 14px;align-items:center}
   #dlabel{font-size:9px;letter-spacing:2px;color:#6d737b;margin-right:4px}
   /* Unselected is deliberately muted: if every button is gold, none of them reads as chosen. */
@@ -171,7 +216,6 @@
      greyscale, so the choice is legible without relying on hue. */
   .msbtn.cur,.msbtn.cur:hover{background:var(--gold);color:#14160f;border-color:#ffd77a;
     cursor:default;font-weight:bold;box-shadow:0 0 10px rgba(232,178,58,.45)}
-  .msbtn.lock{opacity:0.3;cursor:default;pointer-events:none}
   #mctl{font-size:10px;line-height:1.7}
   #objline{margin-top:7px;font-size:9px;letter-spacing:1px;color:var(--gold);text-align:center;line-height:1.4;min-height:11px}
   #objline.urgent{color:var(--red)}
@@ -223,11 +267,19 @@
     </div>
     <div id="pausebanner"><div class="pb-title">PAUSED</div><div class="pb-sub">PRESS P OR SPACE TO RESUME</div></div>
     <div id="overlay"><h1 id="ovtitle">VICTORY</h1><div id="ovsub"></div><button id="ovbtn">CONTINUE</button></div>
-    <div id="intro">
+    <div id="intro"><div class="istack">
       <h1>IRON DOMINION <span style="color:#4fd6b0">3D</span></h1>
+      <section id="board" aria-labelledby="boardhead">
+        <h2 id="boardhead">SELECT A MISSION</h2>
+        <p id="tally"></p>
+        <div id="missions"></div>
+        <p id="classified"></p>
+        <button id="resumebtn" type="button">RESUME SAVED BATTLE</button>
+      </section>
+      <section id="briefing" hidden>
       <h2 id="mcode">OPERATION EMBER</h2>
-      <div id="mselect"></div>
       <div id="dselect"></div>
+      <div class="bcols">
       <div class="brief" id="mbrief"></div>
       <div class="brief" id="mctl">
         <b>CONTROLS</b><br>
@@ -238,9 +290,13 @@
         &bull; Ctrl+1-5: assign group &nbsp;&bull; 1-5: recall group &nbsp;&bull; Right-click icon: cancel &amp; refund<br>
         &bull; Keep power (green bar) above demand or production slows and radar fails.
       </div>
-      <button id="startbtn">COMMENCE OPERATION</button>
-      <button id="resumebtn">RESUME SAVED BATTLE</button>
-    </div>
+      </div>
+      <div class="brow">
+        <button id="backbtn" type="button" title="Back to mission select (Esc)">&lsaquo; ALL MISSIONS</button>
+        <button id="startbtn" type="button">COMMENCE MISSION</button>
+      </div>
+      </section>
+    </div></div>
   </div>
   <div id="sidebar">
     <div class="sb-section" id="radarbox"><canvas id="radar" width="188" height="188"></canvas></div>
@@ -364,7 +420,7 @@ let placing=null;            // building type awaiting placement
 let queues={structure:[], infantry:[], vehicle:[]};   // each tab holds N concurrent production lines
 let gameOver=false, started=false;
 let lowPower=false;          // tracked for radar-offline + EVA transitions
-let mission=0, missionMax=0; // campaign progress (this session)
+let mission=0;               // the mission being briefed or fought; unlocks live in Campaign
 let paused=false;            // simulation frozen; rendering and camera continue
 let difficulty=1;            // 0 easy, 1 normal, 2 hard (persists across missions this session)
 const DIFFS=[
@@ -2333,17 +2389,18 @@ function endGame(win){
   const ov=document.getElementById('overlay'), t=document.getElementById('ovtitle'),
         sub=document.getElementById('ovsub'), btn=document.getElementById('ovbtn');
   const finale=win&&mission===MISSIONS.length-1;
-  if(win)missionMax=Math.max(missionMax,Math.min(MISSIONS.length-1,mission+1));
+  const opened=win&&Campaign.recordClear(mission,difficulty);
   // The continue-slot only ever holds a live battle: a decided one is cleared,
-  // while campaign unlock progress persists so the mission select stays open.
-  clearBattleSave(); saveProgress();
+  // while campaign progress persists so the mission board stays open.
+  clearBattleSave();
   t.textContent=finale?'CAMPAIGN COMPLETE':win?'MISSION ACCOMPLISHED':'MISSION FAILED';
   t.className=win?'':'lose';
   sub.textContent=finale?'THE SCOURGE IS BROKEN. THE DOMINION STANDS.'
-    :win?'NEXT: '+MISSIONS[mission+1].title
+    :win?(opened?'UNLOCKED — ':'NEXT: ')+missionTitle(mission+1)
     :'THE OPERATION CONTINUES. REGROUP AND STRIKE AGAIN.';
-  btn.textContent=finale?'RESTART CAMPAIGN':win?'NEXT BRIEFING':'RETRY MISSION';
-  btn.onclick=()=>{ov.style.display='none';showBriefing(finale?0:win?mission+1:mission);};
+  btn.textContent=finale?'MISSION SELECT':win?'NEXT BRIEFING':'RETRY MISSION';
+  btn.onclick=()=>{ov.style.display='none';
+    if(finale)showBoard(); else showBriefing(win?mission+1:mission);};
   ov.style.display='flex';
   if(win){beep(523,0.15,'square',0.1);setTimeout(()=>beep(659,0.15,'square',0.1),160);setTimeout(()=>beep(784,0.3,'square',0.1),320);}
   else beep(120,0.8,'sawtooth',0.12);
@@ -4319,7 +4376,7 @@ const PBASE={buildings:[['conyard',8,MAPH-13],['power',13,MAPH-12],['refinery',7
   units:[['harvester',12,MAPH-6],['trooper',15,MAPH-10],['trooper',16,MAPH-9],['trooper',15,MAPH-8]]};
 function pb(extraB,extraU,cr){return {credits:cr,buildings:PBASE.buildings.concat(extraB||[]),units:PBASE.units.concat(extraU||[])};}
 const MISSIONS=[
-{ code:'OPERATION EMBER \u00b7 PHASE I', title:'MISSION 1: FIRST BLOOD', seed:7, tech:1, land:{mountain:0.75,ridges:1,passes:3,trees:0.35,scrub:0.6,mud:0.05,boulders:22},
+{ code:'OPERATION EMBER \u00b7 PHASE I', name:'FIRST BLOOD', blurb:'Raze a lightly held Scourge outpost before its armour arrives.', seed:7, tech:1, land:{mountain:0.75,ridges:1,passes:3,trees:0.35,scrub:0.6,mud:0.05,boulders:22},
   objType:'destroy_all', objShort:'DESTROY ALL ENEMY STRUCTURES',
   brief:"<b>COMMANDER \u2014</b> Scourge scouts have raised a forward outpost on the north-eastern ridge. Their armor division has not yet arrived \u2014 the outpost fields infantry and a single gun emplacement. Establish your economy, harvest <i>ore crystals</i>, train a strike force, and raze the outpost before it grows teeth.",
   player:pb([],[['tank',17,MAPH-11]],3000),
@@ -4327,7 +4384,7 @@ const MISSIONS=[
     units:[['trooper',MAPW-18,14],['trooper',MAPW-16,15]]},
   ai:{income:4,buildInt:14,armyCap:8,waveInt:125,waveFirst:150,waveSize:2,waveCap:5,heavyAt:9e9} },
 
-{ code:'OPERATION EMBER \u00b7 PHASE II', title:'MISSION 2: HOLD THE LINE', seed:21, tech:2, land:{mountain:0.71,ridges:2,passes:2,trees:0.30,scrub:0.5,mud:0.08,boulders:26},
+{ code:'OPERATION EMBER \u00b7 PHASE II', name:'HOLD THE LINE', blurb:'Dig in and survive six minutes of counterattack until relief arrives.', seed:21, tech:2, land:{mountain:0.71,ridges:2,passes:2,trees:0.30,scrub:0.5,mud:0.08,boulders:26},
   objType:'survive', objShort:'SURVIVE UNTIL RELIEF ARRIVES', surviveTime:360,
   brief:"<b>COMMANDER \u2014</b> Your assault stung them. The Scourge is counterattacking in force and our relief column is <i>six minutes</i> out. Dig in: a barracks stands ready, gun turrets will hold the perimeter, and every second bought is a second earned. Survive until relief arrives \u2014 or break their base yourself if you can.",
   player:pb([['barracks',15,MAPH-8]],[['tank',17,MAPH-11],['tank',18,MAPH-9]],4500),
@@ -4335,7 +4392,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['trooper',MAPW-18,14],['tank',MAPW-14,18]]},
   ai:{income:13,buildInt:7,armyCap:20,waveInt:55,waveFirst:70,waveSize:4,waveCap:10,heavyAt:3600} },
 
-{ code:'OPERATION EMBER \u00b7 PHASE III', title:'MISSION 3: ORE WAR', seed:33, tech:3, land:{mountain:0.73,ridges:1,passes:2,trees:0.40,scrub:0.6,mud:0.22,boulders:24},
+{ code:'OPERATION EMBER \u00b7 PHASE III', name:'ORE WAR', blurb:'Take the central ore basin from a full Scourge war economy.', seed:33, tech:3, land:{mountain:0.73,ridges:1,passes:2,trees:0.40,scrub:0.6,mud:0.22,boulders:24},
   objType:'destroy_all', objShort:'DESTROY ALL ENEMY STRUCTURES',
   brief:"<b>COMMANDER \u2014</b> The relief column has secured our flank. Now both armies bleed for the same prize: the <i>central ore basin</i>. The Scourge runs a full war economy \u2014 refinery, factory, entrenched turrets. Starve them or smash them; either way, nothing of theirs is left standing when you're done.",
   player:pb([],[],3000),
@@ -4343,7 +4400,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['trooper',MAPW-18,14],['trooper',MAPW-17,15],['tank',MAPW-14,18]]},
   ai:{income:8,buildInt:9,armyCap:18,waveInt:85,waveFirst:110,waveSize:3,waveCap:12,heavyAt:1800} },
 
-{ code:'OPERATION EMBER \u00b7 PHASE IV', title:'MISSION 4: DECAPITATION', seed:55, tech:4, land:{mountain:0.72,ridges:2,passes:2,trees:0.25,scrub:0.5,mud:0.10,boulders:28},
+{ code:'OPERATION EMBER \u00b7 PHASE IV', name:'DECAPITATION', blurb:'Break a ring of gun turrets and kill the enemy Construction Yard.', seed:55, tech:4, land:{mountain:0.72,ridges:2,passes:2,trees:0.25,scrub:0.5,mud:0.10,boulders:28},
   objType:'destroy_target', objShort:'DESTROY THE ENEMY CONSTRUCTION YARD',
   brief:"<b>COMMANDER \u2014</b> Intelligence has located the ridge sector's command node: a hardened <i>Construction Yard</i> buried behind a ring of gun turrets. Kill the head and the body dies \u2014 you need not level the base, only its heart. Expect murderous defensive fire. Mammut armor is authorized.",
   player:pb([],[['tank',17,MAPH-11]],3500),
@@ -4351,7 +4408,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['trooper',MAPW-18,14],['tank',MAPW-14,18]]},
   ai:{income:11,buildInt:8,armyCap:16,waveInt:75,waveFirst:90,waveSize:3,waveCap:10,heavyAt:2400} },
 
-{ code:'OPERATION EMBER \u00b7 FINAL PHASE', title:'MISSION 5: EMBER CITADEL', seed:77, tech:5, land:{mountain:0.72,ridges:2,passes:2,trees:0.20,scrub:0.45,mud:0.12,boulders:30},
+{ code:'OPERATION EMBER \u00b7 FINAL PHASE', name:'EMBER CITADEL', blurb:'Crush the ore-basin outpost, then burn the citadel on the heights.', seed:77, tech:5, land:{mountain:0.72,ridges:2,passes:2,trees:0.20,scrub:0.45,mud:0.12,boulders:30},
   objType:'destroy_all', objShort:'RAZE THE CITADEL \u2014 LEAVE NOTHING',
   brief:"<b>COMMANDER \u2014</b> The ridge campaign ends here. The Scourge citadel commands the heights with a <i>forward outpost</i> squatting on the central ore basin and heavy armor rolling off their lines early and often. Break the outpost, choke their ore, and burn the citadel to its foundations. But know this: intercepted signals speak of a far greater host massing in the <i>southern wastes</i>. Finish Operation Ember \u2014 then we march south.",
   player:pb([],[],3000),
@@ -4361,7 +4418,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['trooper',MAPW-18,14],['tank',MAPW-14,18],['trooper',39,36],['trooper',42,35],['tank',40,37]]},
   ai:{income:15,buildInt:6,armyCap:26,waveInt:50,waveFirst:55,waveSize:5,waveCap:14,heavyAt:1200} },
 
-{ code:'OPERATION IRONFALL \u00b7 PHASE I', title:'MISSION 6: DEEP STRIKE', seed:91, tech:6, land:{mountain:0.70,ridges:2,passes:2,trees:0.04,scrub:0.25,mud:0.02,boulders:38},
+{ code:'OPERATION IRONFALL \u00b7 PHASE I', name:'DEEP STRIKE', blurb:'No Construction Yard, no reinforcements. Gut their staging base.', seed:91, tech:6, land:{mountain:0.70,ridges:2,passes:2,trees:0.04,scrub:0.25,mud:0.02,boulders:38},
   objType:'destroy_all', objShort:'DESTROY THE STAGING BASE \u2014 NO REINFORCEMENT',
   brief:"<b>COMMANDER \u2014</b> The ridge is ours, and the Scourge host has withdrawn into the southern wastes to regroup. A strike group has been airlifted behind their picket line: barracks, war factory, and a skeleton crew. There is <i>no Construction Yard</i> and none is coming \u2014 what you landed with is what you fight with. Gut their staging base before their armor musters, and guard your factory with your life: lose it and the wastes will bury you.",
   player:{credits:2500,
@@ -4371,7 +4428,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['tank',MAPW-14,18],['tank',MAPW-16,17],['trooper',MAPW-18,14],['trooper',MAPW-17,15],['gunship',MAPW-20,11]]},
   ai:{income:12,buildInt:7,armyCap:22,waveInt:60,waveFirst:65,waveSize:4,waveCap:12,heavyAt:1500} },
 
-{ code:'OPERATION IRONFALL \u00b7 PHASE II', title:'MISSION 7: IRON RAIN', seed:104, tech:7, land:{mountain:0.71,ridges:2,passes:2,trees:0.10,scrub:0.3,mud:0.05,boulders:34},
+{ code:'OPERATION IRONFALL \u00b7 PHASE II', name:'IRON RAIN', blurb:'Weather eight minutes of armoured waves until the siege train arrives.', seed:104, tech:7, land:{mountain:0.71,ridges:2,passes:2,trees:0.10,scrub:0.3,mud:0.05,boulders:34},
   objType:'survive', objShort:'SURVIVE THE IRON RAIN', surviveTime:480,
   brief:"<b>COMMANDER \u2014</b> Reprisal. The Scourge answers Deep Strike with everything they have on tracks \u2014 wave after wave of armor off their southern lines, Mammut hulls among them early. Our siege train is <i>eight minutes</i> behind you. Entrench, keep the power flowing, and let their storm break against your guns. Survive the iron rain \u2014 or if you find the strength, walk out of it and break them yourself.",
   player:pb([['barracks',15,MAPH-8],['turret',18,MAPH-12],['turret',6,MAPH-15]],[['tank',17,MAPH-11],['tank',18,MAPH-9]],5000),
@@ -4380,7 +4437,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-12,16],['tank',MAPW-14,18],['tank',40,37],['trooper',39,36],['trooper',42,35],['gunship',MAPW-18,12],['gunship',MAPW-14,12]]},
   ai:{income:16,buildInt:6,armyCap:28,waveInt:45,waveFirst:40,waveSize:5,waveCap:15,heavyAt:900} },
 
-{ code:'OPERATION IRONFALL \u00b7 PHASE III', title:'MISSION 8: TWIN SERPENTS', seed:118, tech:8, land:{mountain:0.70,ridges:3,passes:2,trees:0.15,scrub:0.35,mud:0.20,boulders:30},
+{ code:'OPERATION IRONFALL \u00b7 PHASE III', name:'TWIN SERPENTS', blurb:'Two war-camps feed each other men and metal. Destroy both.', seed:118, tech:8, land:{mountain:0.70,ridges:3,passes:2,trees:0.15,scrub:0.35,mud:0.20,boulders:30},
   objType:'destroy_all', objShort:'DESTROY BOTH WAR-CAMPS',
   brief:"<b>COMMANDER \u2014</b> The storm is spent, and now we advance. Two Scourge war-camps share the eastern wastes \u2014 one on the <i>northern heights</i>, one dug into the <i>southern flats</i> \u2014 feeding each other men and metal. Strike one and the other answers; besiege both and they bleed together. There is no clever way through this. Tear both serpents out by the root.",
   player:pb([],[['tank',17,MAPH-11],['tank',18,MAPH-9]],4000),
@@ -4391,7 +4448,7 @@ const MISSIONS=[
       ['harvester',MAPW-13,MAPH-10],['tank',MAPW-15,MAPH-13],['trooper',MAPW-12,MAPH-14],['gunship',MAPW-15,MAPH-9]]},
   ai:{income:17,buildInt:6,armyCap:30,waveInt:55,waveFirst:60,waveSize:5,waveCap:15,heavyAt:1000} },
 
-{ code:'OPERATION IRONFALL \u00b7 PHASE IV', title:'MISSION 9: THE BLACK KEEP', seed:131, tech:9, land:{mountain:0.67,ridges:3,passes:2,trees:0.08,scrub:0.3,mud:0.06,boulders:34},
+{ code:'OPERATION IRONFALL \u00b7 PHASE IV', name:'THE BLACK KEEP', blurb:'Kill the Yard behind the densest turret ring ever charted.', seed:131, tech:9, land:{mountain:0.67,ridges:3,passes:2,trees:0.08,scrub:0.3,mud:0.06,boulders:34},
   objType:'destroy_target', objShort:'DESTROY THE BLACK KEEP\u2019S CONSTRUCTION YARD',
   brief:"<b>COMMANDER \u2014</b> Beyond the wastes stands the <i>Black Keep</i> \u2014 command fortress of the southern host. Its Construction Yard directs every Scourge banner south of the ridge from behind the densest turret ring we have ever charted. We cannot afford to level it all, and we do not need to: kill the Yard and the body starves. Mammut armor is authorized and recommended. Punch one hole, Commander \u2014 one is enough.",
   player:pb([],[['heavy',17,MAPH-11],['tank',18,MAPH-9]],4000),
@@ -4401,7 +4458,7 @@ const MISSIONS=[
     units:[['harvester',MAPW-11,18],['tank',MAPW-15,14],['tank',MAPW-13,16],['heavy',MAPW-14,13],['artillery',MAPW-14,17],['trooper',MAPW-17,10],['trooper',MAPW-7,11],['gunship',MAPW-13,12],['gunship',MAPW-15,11]]},
   ai:{income:18,buildInt:6,armyCap:24,waveInt:55,waveFirst:60,waveSize:5,waveCap:14,heavyAt:900} },
 
-{ code:'OPERATION IRONFALL \u00b7 FINAL PHASE', title:'MISSION 10: DOMINION DAWN', seed:149, tech:10, land:{mountain:0.71,ridges:3,passes:2,trees:0.18,scrub:0.4,mud:0.14,boulders:32},
+{ code:'OPERATION IRONFALL \u00b7 FINAL PHASE', name:'DOMINION DAWN', blurb:'Three fronts, one last battle. Annihilate the Scourge.', seed:149, tech:10, land:{mountain:0.71,ridges:3,passes:2,trees:0.18,scrub:0.4,mud:0.14,boulders:32},
   objType:'destroy_all', objShort:'ANNIHILATE THE SCOURGE \u2014 TOTAL VICTORY',
   brief:"<b>COMMANDER \u2014</b> This is the last dawn of the war. What remains of the Scourge has gathered at the place of their founding: a <i>command spire</i> in the north-east, a war-camp squatting on the great ore basin, and gun batteries walling the western approach to your own gates. They are rich beyond reason, their Mammuts roll from the first minute, and they will neither retreat nor surrender. Every soldier of the Dominion stands behind you. Break all three fronts, burn the spire, and bring the dawn.",
   player:pb([['factory',17,MAPH-13]],[['heavy',19,MAPH-10],['tank',20,MAPH-8]],6000),
@@ -4509,37 +4566,149 @@ function startMission(i){
   document.getElementById('battlectl').style.display='flex';
   saveGame('Mission start — saved');   // checkpoint at the top of every mission
 }
-function showBriefing(i){
-  mission=i; started=false;
+/* ================= CAMPAIGN PROGRESS =================
+   What this browser's commander has earned. Missions unlock strictly in order:
+   clearing one opens the next. So the record is a count of cleared missions
+   rather than a set of ids — a corrupt or hand-edited set could open mission 8
+   with nothing before it, and there would be no way to tell. Alongside it, the
+   best threat level each cleared mission was won on, for the board's badges.
+
+   Storage can throw (private browsing, quota, blocked site data), so every
+   access is guarded and the campaign falls back to an in-memory record for the
+   session rather than refusing to start. */
+const PROG_KEY='ironDominion.progress.v2', PROG_KEY_V1='ironDominion.progress.v1';
+const Campaign={
+  cleared:0,        // missions cleared in order, 0..MISSIONS.length
+  best:[],          // per mission: highest DIFFS index it was cleared on, or null if unknown
+  get highestUnlocked(){ return Math.min(this.cleared,MISSIONS.length-1); },
+  get allCleared(){ return this.cleared>=MISSIONS.length; },
+  isUnlocked(i){ return i>=0&&i<=this.highestUnlocked; },
+  isCleared(i){ return i>=0&&i<this.cleared; },
+  /* Record a victory. Returns true when it opened a new mission, so the
+     debrief can say so. Replaying an earlier mission only improves its badge. */
+  recordClear(i,diff){
+    if(i<0||i>=MISSIONS.length)return false;
+    const opened=i>=this.cleared;
+    if(opened)this.cleared=i+1;
+    const prev=this.best[i];
+    this.best[i]=(typeof prev==='number'&&prev>diff)?prev:diff;
+    this.save();
+    return opened&&!this.allCleared;
+  },
+  load(){
+    try{
+      const raw=localStorage.getItem(PROG_KEY);
+      if(raw){ this.apply(JSON.parse(raw)); return; }
+      /* v1 kept only the highest unlocked mission. Everything below it was
+         cleared; on which threat level is unknown, so those badges go blank. */
+      const v1=JSON.parse(localStorage.getItem(PROG_KEY_V1)||'null');
+      if(v1){ this.apply({cleared:v1.missionMax|0,best:[],difficulty:v1.difficulty}); this.save(); }
+    }catch(e){ /* unreadable: start the campaign fresh for this session */ }
+  },
+  apply(p){
+    const n=MISSIONS.length;
+    this.cleared=Math.max(0,Math.min(n,Number.isInteger(p.cleared)?p.cleared:0));
+    this.best=Array.from({length:n},(_,i)=>{
+      const d=Array.isArray(p.best)?p.best[i]:null;
+      return i<this.cleared&&Number.isInteger(d)&&DIFFS[d]?d:null;
+    });
+    if(Number.isInteger(p.difficulty)&&DIFFS[p.difficulty])difficulty=p.difficulty;
+  },
+  save(){
+    try{ localStorage.setItem(PROG_KEY,JSON.stringify({v:2,cleared:this.cleared,best:this.best,difficulty})); }
+    catch(e){ /* nothing to do: progress simply will not outlive the tab */ }
+  },
+};
+
+/* ================= MISSION BOARD & BRIEFING =================
+   Two screens share #intro. The board lists every mission this commander has
+   unlocked — and only those: what lies further down the campaign stays
+   classified until it is earned. Picking a card opens its full briefing,
+   where the threat level is set and the operation launched. */
+const OBJ_KIND={destroy_all:'ASSAULT', survive:'DEFENCE', destroy_target:'STRIKE'};
+function missionTitle(i){ return 'MISSION '+(i+1)+': '+MISSIONS[i].name; }
+function missionOp(M){ return M.code.split(' · ')[0]; }
+function missionPhase(M){ return M.code.split(' · ')[1]||''; }
+function uiEl(tag,cls,text){
+  const e=document.createElement(tag);
+  if(cls)e.className=cls;
+  if(text!=null)e.textContent=text;
+  return e;
+}
+function showIntroScreen(which){
+  started=false;
   document.getElementById('battlectl').style.display='none';
+  document.getElementById('board').hidden=which!=='board';
+  document.getElementById('briefing').hidden=which!=='briefing';
+  const intro=document.getElementById('intro');
+  intro.style.display='flex'; intro.scrollTop=0;
+}
+function missionCard(i){
+  const M=MISSIONS[i], done=Campaign.isCleared(i), best=Campaign.best[i];
+  const badge=done?'CLEARED'+(best!=null?' · '+DIFFS[best].name:''):'READY';
+  const card=uiEl('button','mcard'+(done?' done':' frontier'));
+  card.type='button';
+  card.setAttribute('aria-label',missionTitle(i)+' — '+M.blurb+' — '+badge);
+  card.append(uiEl('span','mc-no',String(i+1).padStart(2,'0')));
+  const body=uiEl('span','mc-body');
+  const head=uiEl('span','mc-head');
+  head.append(uiEl('strong',null,M.name), uiEl('span','mc-badge'+(done?' cleared':' ready'),badge));
+  body.append(head,
+              uiEl('em',null,missionPhase(M)+' · '+OBJ_KIND[M.objType]),
+              uiEl('span','mc-blurb',M.blurb));
+  card.append(body);
+  card.addEventListener('click',()=>{ beep(440,0.05,'square',0.05); showBriefing(i); });
+  return card;
+}
+function showBoard(){
   refreshResumeBtn();
+  const n=MISSIONS.length, open=Campaign.highestUnlocked;
+  document.getElementById('tally').textContent=Campaign.allCleared
+    ?'CAMPAIGN COMPLETE · ALL '+n+' MISSIONS CLEARED'
+    :Campaign.cleared+' OF '+n+' MISSIONS CLEARED';
+  const grid=document.getElementById('missions'); grid.replaceChildren();
+  let op=null;
+  for(let i=0;i<=open;i++){
+    if(missionOp(MISSIONS[i])!==op){ op=missionOp(MISSIONS[i]); grid.append(uiEl('div','mgroup',op)); }
+    grid.append(missionCard(i));
+  }
+  const hidden=n-1-open;
+  document.getElementById('classified').textContent=hidden>0
+    ?hidden+' FURTHER MISSION'+(hidden>1?'S':'')+' CLASSIFIED · CLEAR '+MISSIONS[open].name+' TO ADVANCE'
+    :'';
+  showIntroScreen('board');
+  /* Land keyboard focus on the mission to play next, so Enter plays on. */
+  const cards=grid.querySelectorAll('.mcard');
+  (grid.querySelector('.mcard.frontier')||cards[cards.length-1])?.focus({preventScroll:true});
+}
+function showBriefing(i){
+  if(!Campaign.isUnlocked(i))i=Campaign.highestUnlocked;   // never brief a mission that has not been earned
+  mission=i;
   const M=MISSIONS[i];
   document.getElementById('mcode').textContent=M.code;
   const newGear=Object.values(BDEFS).concat(Object.values(UDEFS))
     .filter(d=>(d.tech||1)===M.tech&&M.tech>1).map(d=>d.name.toUpperCase());
-  document.getElementById('mbrief').innerHTML='<b>'+M.title+'</b><br><br>'+M.brief+
+  document.getElementById('mbrief').innerHTML='<b>'+missionTitle(i)+'</b><br><br>'+M.brief+
     '<br><br><b style="color:var(--gold)">OBJECTIVE:</b> '+M.objShort+
     (newGear.length?'<br><br><b style="color:var(--green)">NEW EQUIPMENT AUTHORIZED:</b> '+newGear.join(' &middot; '):'');
-  const ms=document.getElementById('mselect'); ms.innerHTML='';
-  for(let k=0;k<MISSIONS.length;k++){
-    const b=document.createElement('button');
-    b.className='msbtn'+(k===i?' cur':'')+(k>missionMax?' lock':'');
-    b.textContent='M'+(k+1);
-    if(k<=missionMax&&k!==i)b.addEventListener('click',()=>showBriefing(k));
-    ms.appendChild(b);
-  }
-  const ds=document.getElementById('dselect'); ds.innerHTML='';
-  const lab=document.createElement('span'); lab.id='dlabel'; lab.textContent='THREAT LEVEL:'; ds.appendChild(lab);
+  const ds=document.getElementById('dselect');
+  const lab=uiEl('span',null,'THREAT LEVEL:'); lab.id='dlabel';
+  ds.replaceChildren(lab);
   for(let k=0;k<DIFFS.length;k++){
-    const b=document.createElement('button');
-    b.className='msbtn'+(k===difficulty?' cur':'');
-    b.textContent=DIFFS[k].name;
-    if(k!==difficulty)b.addEventListener('click',()=>{difficulty=k;showBriefing(mission);});
-    ds.appendChild(b);
+    const b=uiEl('button','msbtn'+(k===difficulty?' cur':''),DIFFS[k].name);
+    b.type='button';
+    if(k!==difficulty)b.addEventListener('click',()=>{ difficulty=k; Campaign.save(); showBriefing(mission); });
+    ds.append(b);
   }
-  document.getElementById('startbtn').textContent=i===0?'COMMENCE OPERATION':'COMMENCE MISSION '+(i+1);
-  document.getElementById('intro').style.display='flex';
+  document.getElementById('startbtn').textContent='COMMENCE MISSION '+(i+1);
+  showIntroScreen('briefing');
+  document.getElementById('startbtn').focus({preventScroll:true});
 }
+document.getElementById('backbtn').addEventListener('click',()=>{ beep(392,0.05,'square',0.05); showBoard(); });
+window.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&document.getElementById('intro').style.display!=='none'
+     &&!document.getElementById('briefing').hidden){ e.preventDefault(); showBoard(); }
+});
 /* ================= SAVE / RESUME =================
    One continue-slot holds a full battle snapshot; a small separate key holds
    campaign unlock progress so the mission select stays open across visits.
@@ -4547,7 +4716,7 @@ function showBriefing(i){
    they regenerate — while grids, entities, economy, queues and AI state are
    captured verbatim. Entity cross-references are stored as ids and relinked on
    load. occ and visible are rebuilt rather than stored (derivable from the rest). */
-const SAVE_KEY='ironDominion.save.v2', PROG_KEY='ironDominion.progress.v1', SAVE_VER=2;
+const SAVE_KEY='ironDominion.save.v2', SAVE_VER=2;
 function b64FromBytes(u8){let s='';const C=0x8000;
   for(let i=0;i<u8.length;i+=C)s+=String.fromCharCode.apply(null,u8.subarray(i,i+C));
   return btoa(s);}
@@ -4558,7 +4727,7 @@ function serializeState(){
   const tid=e=>(e&&e.hp>0)?e.id:0;
   return {
     v:SAVE_VER, savedAt:Date.now(),
-    mission, missionMax, difficulty, credits:credits.slice(),
+    mission, difficulty, credits:credits.slice(),
     tick, surviveT, nextId, camX, camY,
     grids:{
       terrain:b64FromBytes(terrain),
@@ -4576,7 +4745,7 @@ function serializeState(){
   };
 }
 function restoreState(S){
-  mission=S.mission; missionMax=Math.max(missionMax,S.missionMax||0); difficulty=S.difficulty;
+  mission=S.mission; difficulty=S.difficulty;
   credits=S.credits.slice(); tick=S.tick; surviveT=S.surviveT; nextId=S.nextId; camX=S.camX; camY=S.camY;
   terrain=bytesFromB64(S.grids.terrain);
   const ob=bytesFromB64(S.grids.ore); oreAmt=new Uint16Array(ob.buffer,0,MAPW*MAPH);
@@ -4631,7 +4800,7 @@ function saveGame(reason){
   if(!started||gameOver)return false;
   try{
     localStorage.setItem(SAVE_KEY,JSON.stringify(serializeState()));
-    saveProgress();
+    Campaign.save();
     eva(reason||'Battle saved'); flashSaveBtn(); return true;
   }catch(e){ eva('Save failed — storage unavailable'); return false; }
 }
@@ -4647,10 +4816,6 @@ function loadGame(){
   }catch(e){ console.error(e); eva('Saved battle is corrupt'); return false; }
 }
 function clearBattleSave(){try{localStorage.removeItem(SAVE_KEY);}catch(e){}}
-function saveProgress(){try{localStorage.setItem(PROG_KEY,JSON.stringify({missionMax,difficulty}));}catch(e){}}
-function loadProgress(){try{const p=JSON.parse(localStorage.getItem(PROG_KEY)||'null');
-  if(p){missionMax=Math.max(0,Math.min(MISSIONS.length-1,p.missionMax|0));
-    if(typeof p.difficulty==='number'&&DIFFS[p.difficulty])difficulty=p.difficulty;}}catch(e){}}
 function flashSaveBtn(){const b=document.getElementById('savebtn');
   b.classList.add('flash');setTimeout(()=>b.classList.remove('flash'),260);}
 function fmtSaveTime(S){
@@ -4673,7 +4838,7 @@ document.getElementById('exitbtn').addEventListener('click',()=>{
   if(started&&!gameOver&&!confirm('Leave this battle and return to mission select?\nUnsaved progress will be lost.'))return;
   setPaused(false);
   document.getElementById('overlay').style.display='none';
-  showBriefing(mission);
+  showBoard();
   beep(392,0.08,'square',0.05);
 });
 document.getElementById('resumebtn').addEventListener('click',()=>{
@@ -4853,14 +5018,15 @@ window.ID3={
     get camX(){ return camX; },           set camX(v){ camX=v; },
     get camY(){ return camY; },           set camY(v){ camY=v; },
     canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
+    Campaign, showBoard, showBriefing,
   },
 };
 
 function setup(){
   resize();
   buildSprites();
-  loadProgress();
-  showBriefing(missionMax);
+  Campaign.load();
+  showBoard();
 }
 let last=0, acc=0;
 const STEP=1/30;
