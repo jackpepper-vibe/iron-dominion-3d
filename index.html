@@ -304,6 +304,7 @@
         &bull; Ctrl+1-5: assign group &nbsp;&bull; 1-5: recall group &nbsp;&bull; Right-click icon: cancel &amp; refund<br>
         &bull; Selected building: <b>R</b> repair &nbsp;&bull; <b>X</b> sell &nbsp;&bull; right-click ground sets a factory's rally point<br>
         &bull; Engineers: right-click a structure to capture (at half strength or less), sabotage, or restore your own<br>
+        &bull; MCV: <b>V</b> deploys a Construction Yard on the open ground under it<br>
         &bull; Keep power (green bar) above demand or production slows and radar fails.
       </div>
       </div>
@@ -414,11 +415,13 @@ const UDEFS={
   artillery:{name:'Thor Artillery',cost:1200, hp:180, dmg:60, range:7.6, rof:3.4,  speed:38, sight:7, build:18, from:'factory',  req:'techlab', r:11, kind:'veh', tech:7},
   gunship:  {name:'Hawk Gunship',  cost:1200, hp:210, dmg:28, range:5.2, rof:0.7,  speed:120,sight:9, build:16, from:'factory',  req:'helipad', r:12, kind:'veh', tech:6, fly:true},
   harvester:{name:'Ore Harvester', cost:1100, hp:650, dmg:0,  range:0,   rof:0,    speed:56, sight:5, build:16, from:'factory',  r:13, kind:'veh', tech:1},
+  mcv:      {name:'Mobile Construction Vehicle', cost:3000, hp:900, dmg:0, range:0, rof:0, speed:40, sight:6, build:26, from:'factory', r:16, kind:'veh', tech:5,
+             desc:'Deploys into a Construction Yard wherever there is open ground.'},
 };
 const SIDEBAR_ITEMS={
   structure:['power','refinery','barracks','factory','guardtower','turret','bastion','helipad','sandbag','trench','hedgehog','techlab'],
   infantry:['trooper','rocketeer','grenadier','engineer'],
-  vehicle:['buggy','tank','heavy','gunship','artillery','harvester'],
+  vehicle:['buggy','tank','heavy','gunship','artillery','harvester','mcv'],
 };
 const PLAYER=0, ENEMY=1;
 const FACTION_COLOR=['#e8b23a','#c23b3b'];
@@ -1001,6 +1004,7 @@ function buildSprites(){
     SPR.veh[owner].artillery=makeArtillery(trim);
     SPR.veh[owner].gunship=makeGunship(trim);
     SPR.veh[owner].harvester=makeHarvester(trim);
+    SPR.veh[owner].mcv=makeMCV(trim);
   }
 }
 /* ---- 2.5D construction kit ----
@@ -1780,6 +1784,24 @@ function makeHarvester(trim){
   for(let i=0;i<3;i++)c.fillRect(L+5,8.5+i*(Wd-16)/2.5,1.4,1.4);
   return {hull,tur:null};
 }
+/* Mobile construction vehicle: long wheeled carrier, the yard folded on its
+   back, the crane boom laid along the deck in faction colour. */
+function makeMCV(trim){
+  const L=40,Wd=24;
+  const hull=mkCan(L+2,Wd), c=hull.getContext('2d');
+  c.fillStyle='#16181c';
+  for(const x of [5,15,29])for(const y of [0,Wd-5]){rr(c,x,y,8,5,2);c.fill();}
+  const g=c.createLinearGradient(0,3,0,Wd-3);
+  g.addColorStop(0,'#b9a57c');g.addColorStop(0.5,'#8a7a58');g.addColorStop(1,'#56492f');
+  rr(c,1,3,L-2,Wd-6,3);c.fillStyle=g;c.fill();c.strokeStyle='rgba(0,0,0,0.55)';c.stroke();
+  c.fillStyle='#6d6450';rr(c,3,5,24,Wd-10,2);c.fill();
+  c.strokeStyle='rgba(0,0,0,0.4)';for(let x=9;x<27;x+=6){c.beginPath();c.moveTo(x,5);c.lineTo(x,Wd-5);c.stroke();}
+  c.fillStyle=trim;c.fillRect(3,7.5,28,2.4);
+  c.fillStyle='#31353b';rr(c,L-10,4.5,8,Wd-9,2);c.fill();
+  c.fillStyle='#8fd8ea';c.fillRect(L-5,6.5,2.6,Wd-13);
+  c.fillStyle='#e8a53a';c.fillRect(L-8,3.2,2,1.8);
+  return {hull,tur:null};
+}
 /* Attack helicopter. Nose faces +x (angle 0), tail boom to -x, matching the hull
    convention of the ground vehicles. The main rotor is drawn at runtime so it can
    spin; the sprite is just the airframe. */
@@ -2040,6 +2062,35 @@ function updateEngineer(u,dt,d){
     /* the path ends beside the footprint; step the last few units to the wall */
     const a=Math.atan2(t.y-u.y,t.x-u.x); u.x+=Math.cos(a)*d.speed*dt; u.y+=Math.sin(a)*d.speed*dt; u.path=null;
   }
+}
+
+/* ================= MOBILE CONSTRUCTION VEHICLE =================
+   The MCV unfolds into a Construction Yard on the 3x3 of open, buildable
+   ground centred on it — no adjacency rule, which is the whole point: it is
+   how a second base is founded, or the first one refounded after the yard
+   is lost. */
+function mcvSite(u){ const tx=Math.floor(u.x/TILE)-1, ty=Math.floor(u.y/TILE)-1; return {tx,ty,w:3,h:3}; }
+function canDeploy(u){
+  if(!u||u.type!=='mcv'||u.hp<=0)return false;
+  const {tx,ty}=mcvSite(u);
+  if(tx<0||ty<0||tx+3>MAPW||ty+3>MAPH)return false;
+  for(let dy=0;dy<3;dy++)for(let dx=0;dx<3;dx++){
+    const k=idx(tx+dx,ty+dy);
+    if(!TDEF[terrain[k]].build||occ[k]!==0)return false;
+  }
+  const x0=tx*TILE, y0=ty*TILE, x1=x0+3*TILE, y1=y0+3*TILE;
+  return !units.some(o=>o!==u&&!UDEFS[o.type].fly&&o.x>x0-6&&o.x<x1+6&&o.y>y0-6&&o.y<y1+6);
+}
+function deployMCV(u){
+  if(!canDeploy(u)){ if(u&&u.owner===PLAYER){eva('Cannot deploy here');beep(150,0.1,'square',0.06);} return null; }
+  const {tx,ty}=mcvSite(u);
+  const hp=u.hp/u.maxhp;
+  units.splice(units.indexOf(u),1);
+  selection=selection.filter(s=>s!==u);
+  const b=addBuilding(u.owner,'conyard',tx,ty);
+  b.built=0; b.hp=Math.max(1,b.maxhp*hp);          // unfolds from the ground, keeps its wounds
+  if(u.owner===PLAYER){eva('Deploying');beep(520,0.08,'square',0.07);selectedBuilding=b;buildSidebar();}
+  return b;
 }
 
 /* ================= SELL / REPAIR / RALLY =================
@@ -2911,6 +2962,10 @@ window.addEventListener('keydown',e=>{
   const sb=selectedBuilding&&selectedBuilding.owner===PLAYER?selectedBuilding:null;
   if(sb&&e.key.toLowerCase()==='r'&&started&&!gameOver){setRepair(sb,!sb.repairing);refreshActions(true);}
   if(sb&&e.key.toLowerCase()==='x'&&started&&!gameOver){sellBuilding(sb);refreshActions(true);}
+  if(e.key.toLowerCase()==='v'&&started&&!gameOver){
+    const m=selection.find(u=>u.type==='mcv'&&u.owner===PLAYER);
+    if(m){deployMCV(m);refreshActions(true);}
+  }
   if(e.key.toLowerCase()==='e')setEdgeScroll(!edgeScroll);
   const n=parseInt(e.key);
   if(n>=1&&n<=5){
@@ -4050,6 +4105,26 @@ const UMODELS={
     blk(g,7,1.6,1.6,IRON,12,2.4,0,true);             // chin gun
     g.userData.rotor=rot; g.userData.tailrotor=tr;
     g.userData.muzzle=new THREE.Vector3(17,3,0);
+  },
+  mcv(g,trim,dark){
+    /* A six-wheeled carrier with the yard folded on its back: the gantry
+       crane laid flat, the hall panels stacked, a deploy jack at each corner. */
+    for(const sx of [-13,-3,11])for(const sz of [-1,1])wheel(g,4.6,3.4,TYRE,sx,4.6,sz*8.6);
+    for(const sx of [-13,-3,11])for(const sz of [-1,1])cyl(g,1.5,0.4,IRON,sx,4.6,sz*10.4);
+    profile(g,[[-21,3.6],[18,3.6],[21,6.5],[21,9.5],[-21,9.5]],15,PLATE_D);          // chassis
+    profile(g,[[12,9.5],[21,9.5],[21,13],[18.5,18],[12,18]],14,PLATE_L);             // cab
+    blk(g,0.6,3.2,11.5,'#1c2229',19.6,14,0).rotation.z=0.5;                           // windscreen
+    for(const sz of [-1,1]) put(g,G_SPH,1.3,1.3,1.3,WINDOW,21.2,11,sz*5,false,true);
+    blk(g,30,7,16,PLATE,-5,9.5,0,true);                                                 // folded hall
+    blk(g,26,2.4,13,PLATE_L,-6,16.5,0,true);
+    for(let i=0;i<3;i++)blk(g,7,1,15.2,PLATE_D,-15+i*9,16.9+i*0.01,0,true);            // stacked panels
+    blk(g,32,2.2,2.2,trim,-4,19.3,4.5,true);                                           // crane boom, stowed
+    blk(g,5,4,4,IRON,11,17,4.5,true);
+    cyl(g,1.8,3,IRON,-18,18.9,4.5);
+    for(const sx of [-1,1])for(const sz of [-1,1]) blk(g,2.2,6,2.2,HAZARD,sx*18,1.5,sz*7.4,true);  // deploy jacks
+    for(const sz of [-1,1]) stripe(g,26,2.4,trim,-5,16.7,sz*6.6);
+    ANIM.blink(g,lamp(g,1.2,'#ffb640',15,18,-5),0);
+    whip(g,14,18,5,12);
   },
   harvester(g,trim,dark){
     /* The ore hauler: a big raked hopper behind a forward cab, riding wide
@@ -5328,6 +5403,15 @@ function render(dt){
     drawHealth(b.x-r,b.y-r-8,r*2,u.hp/u.maxhp);
     if(u.rank)drawRank(b.x+r+3,b.y-r-9,u.rank);
   }
+  for(const u of selection){
+    if(u.type!=='mcv'||u.hp<=0)continue;
+    const q=footprintQuad(mcvSite(u)), ok=canDeploy(u);
+    if(!q)continue;
+    ctx.save(); ctx.setLineDash([6,4]);
+    ctx.fillStyle=ok?'rgba(120,255,140,.10)':'rgba(255,80,80,.14)'; ctx.strokeStyle=ok?'#8f8':'#f66'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(q[0].x,q[0].y); for(let i=1;i<4;i++)ctx.lineTo(q[i].x,q[i].y); ctx.closePath();
+    ctx.fill(); ctx.stroke(); ctx.restore();
+  }
   if(selectedBuilding&&selectedBuilding.hp>0){
     drawBuildingBrackets(selectedBuilding);
     if(selectedBuilding.rally&&selectedBuilding.owner===PLAYER)drawRally(selectedBuilding);
@@ -5570,6 +5654,12 @@ ACTIONS.push({
   ].concat(RALLY_FROM.has(c.b.type)?[Object.assign(document.createElement('span'),{className:'hint',
     textContent:c.b.rally?'RALLY SET · RIGHT-CLICK TO MOVE':'RIGHT-CLICK GROUND TO SET RALLY'})]:[]),
   sig:c=>'b'+c.b.id+(c.b.repairing?'r':'')+(canRepair(c.b)?'c':'')+Math.round(c.b.hp/c.b.maxhp*20)+(c.b.rally?'R':''),
+});
+ACTIONS.push({
+  when:c=>!c.b&&c.units.some(u=>u.type==='mcv'),
+  build:c=>{ const m=c.units.find(u=>u.type==='mcv');
+    return [actButton('DEPLOY','V','',()=>deployMCV(m),!canDeploy(m))]; },
+  sig:c=>{ const m=c.units.find(u=>u.type==='mcv'); return 'm'+m.id+(canDeploy(m)?'y':'n'); },
 });
 function refreshActions(force){
   const bar=document.getElementById('actbar');
@@ -6284,6 +6374,7 @@ window.ID3={
     canPlace, killEntity, saveGame, loadGame, updateFog, renderRadar,
     Campaign, showBoard, showBriefing,
     setRepair, sellBuilding, setRally, spawnUnitAt, refreshActions, orderCapture, awardKill, dealDamage,
+    canDeploy, deployMCV,
     get credits(){ return credits; }, get selectedBuilding(){ return selectedBuilding; },
     set selectedBuilding(v){ selectedBuilding=v; },
   },
@@ -6335,6 +6426,7 @@ function loop(ts){
       }
       if(tick%10===0)updateFog();
       if(tick%8===0){refreshIcons();updateHUD();}
+      else if(tick%4===0)refreshActions(false);
       if(tick%12===0)renderRadar();
       if(tick%15===0){
         const pok=powerOf(PLAYER).ok;

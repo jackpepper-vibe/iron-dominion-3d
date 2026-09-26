@@ -309,6 +309,25 @@ const vet = await page.evaluate(() => {
 });
 check('kills promote a unit', vet.rank >= 1, `rank ${vet.rank} after $${vet.xp} of kills`);
 
+/* ---- MCV: deploys into a yard on open ground, refuses on occupied ground ---- */
+const mcv = await page.evaluate(() => {
+  const S = ID3.sim;
+  /* find a clear 5x5 patch of buildable ground far from everything */
+  let spot = null;
+  for (let ty = 8; ty < S.MAPH - 8 && !spot; ty += 3) for (let tx = 8; tx < S.MAPW - 8 && !spot; tx += 3) {
+    const m = ID3.spawn(0, 'mcv', tx, ty);
+    if (S.canDeploy(m)) spot = m; else { m.hp = 0; S.units.splice(S.units.indexOf(m), 1); }
+  }
+  if (!spot) return { found: false };
+  const yards0 = S.buildings.filter(b => b.type === 'conyard' && b.owner === 0).length;
+  const y = S.deployMCV(spot);
+  const blocked = ID3.spawn(0, 'mcv', y.tx + 1, y.ty + 1);   // standing on the new yard
+  return { found: true, yards: S.buildings.filter(b => b.type === 'conyard' && b.owner === 0).length - yards0,
+           gone: !S.units.includes(spot), refused: !S.canDeploy(blocked) };
+});
+check('an MCV deploys into a Construction Yard and refuses occupied ground',
+  mcv.found && mcv.yards === 1 && mcv.gone && mcv.refused, JSON.stringify(mcv));
+
 /* ---- save / restore survives the new camera semantics ---- */
 const save = await page.evaluate(() => {
   const S = ID3.sim;
