@@ -92,6 +92,16 @@ mud, road and woodland floor come from `splatCan` (4 texels/tile, blurred, edges
 noise-broken in the shader); ore glow from a 72x72 filtered ore map. Never
 `fillRect` a whole tile in the painter again — it shows the grid as squares.
 
+**Structures and vehicles.** Author parts in neutral plate (`PLATE*`); each
+side is re-skinned by `applyLivery` (Dominion khaki, Scourge gunmetal). Every
+non-glow material from `M()` gets the `surfaceify` wear shader (seams, grime,
+streaks, dust, worn box edges), keyed by `SURFACE_KIND[hex]` — add a hex there
+if it is concrete, earth, shutter, hazard or glass. After a prototype is built,
+`mergeStatic` merges every part that does not move into one mesh per
+material, so **anything that animates must be tagged** — `userData.tur/rotor/
+tailrotor/wheel/ore`, or `ANIM.spin/blink/stack` — or it will be frozen into
+the merge. `instantiate()` remaps those tags onto clones.
+
 ## Verification
 
 Screenshots and a smoke test. Do not describe a visual change as done by
@@ -106,8 +116,9 @@ node scripts/look.mjs [--perf]  # REAL-GPU posed captures -> shots/look/, + ms/f
 ```
 
 Judge graphics with `look.mjs` only: the other two render on SwiftShader,
-which is not what a player sees. Frame cost after the 2026-09-26 ground pass
-was 7-10 ms on the Iris Xe (was 6-8).
+which is not what a player sees. `--perf` prints ms, draw calls and triangles.
+After the 2026-09-26 structures pass: ~11 ms in play, ~17 ms at full zoom-out
+on the Iris Xe, fill-bound (ground shader + shadows), ~280-600 draws.
 
 `window.ID3` is the test hook — `mission(i, revealAll)`, `cam(x,y,dist)`,
 `look(tx,ty,dist)`, `find(type,dist)`, `spawn`, `build`, `step(n,dt)`,

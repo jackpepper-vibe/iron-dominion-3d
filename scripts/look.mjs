@@ -35,6 +35,7 @@ mkdirSync(outDir, { recursive: true });
    simulation deterministically before the frame is taken. */
 const POSES = [
   { name: 'base', mission: 0, setup: () => { ID3.find('conyard', 520); } },
+  { name: 'close', mission: 0, setup: () => { ID3.find('conyard', 360); ID3.cam(ID3.sim.camX + 40, ID3.sim.camY + 20, 360); } },
   { name: 'showcase', mission: 0, steps: 2, setup: () => {
       /* Every structure and vehicle side by side on open ground near home, so
          the model kit is judged as a set rather than one at a time. */
@@ -56,7 +57,7 @@ const POSES = [
       for (let i = 0; i < 5; i++) ID3.spawn(0, i < 2 ? 'heavy' : 'tank', 10 + i * 1.5, y0 + 4);
       for (let i = 0; i < 5; i++) ID3.spawn(1, i < 2 ? 'heavy' : 'tank', 10 + i * 1.5, y0 - 3);
       for (let i = 0; i < 4; i++) ID3.spawn(1, 'trooper', 16 + i, y0 - 2);
-      ID3.step(75, 1 / 30);
+      ID3.step(28, 1 / 30);   // first exchanges: shots in the air, nobody dead yet
       ID3.look(13, y0 + 1, 520);
     } },
   { name: 'enemy', mission: 4, steps: 30, setup: () => {
@@ -109,9 +110,9 @@ for (const pose of POSES) {
         if (i >= 20) t.push(performance.now() - t0);
       }
       t.sort((a, b) => a - b);
-      return t[t.length >> 1];
+      return { ms: t[t.length >> 1], ...ID3.R3D.stats() };
     });
-    timing = `  ${ms.toFixed(1)} ms/frame`;
+    timing = `  ${ms.ms.toFixed(1)} ms/frame  ${ms.calls} draws  ${(ms.tris / 1000).toFixed(0)}k tris`;
   }
   await page.keyboard.press('p');
   console.log('  ', file + timing);

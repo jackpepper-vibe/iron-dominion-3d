@@ -2981,6 +2981,8 @@ function eva(msg){
    scaled per part. One geometry and one material per colour means a base of
    forty buildings still draws in a few dozen calls. */
 const G_BOX=new THREE.BoxGeometry(1,1,1);
+/* marks the one primitive whose edges the surface shader may wear */
+G_BOX.setAttribute('edgeK',new THREE.BufferAttribute(new Float32Array(G_BOX.attributes.position.count).fill(1),1));
 const G_CYL=new THREE.CylinderGeometry(0.5,0.5,1,14);
 const G_CYL6=new THREE.CylinderGeometry(0.5,0.5,1,6);
 const G_CONE=new THREE.ConeGeometry(0.5,1,7);
@@ -3031,18 +3033,198 @@ function shroudify(mat){
    near-black; not decoding at all lifts it to pale putty. */
 function col(hex){ return new THREE.Color(hex); }
 
+/* ---- surface wear ----
+   What turns a flat-coloured primitive into a piece of a war machine. Every
+   structure and vehicle material gets it: plate seams, per-panel tone,
+   grime pooling low on each part, rain streaks down vertical faces, dust on
+   the tops, and worn light edges on box parts.
+
+   It works in each part's own *scaled* space (the unit primitive times the
+   mesh's scale), never world space, so detail rides with a moving tank
+   instead of sliding across it, and a 90-unit hall gets more panels than a
+   9-unit hatch. Seams fade out once they would be thinner than a pixel, so a
+   zoomed-out base does not shimmer. */
+const SURFACE={uGrime:{value:null}};           // R3D fills in its rock detail as the noise source
+const SURF_NONE=0, SURF_PLATE=1, SURF_SLAB=2, SURF_EARTH=3, SURF_HAZARD=4, SURF_SHUTTER=5;
+const SURFACE_KIND={};                          // hex -> kind; anything unlisted is plate
+function surfaceify(mat,kind,baked){
+  if(kind===SURF_NONE)return mat;
+  const prev=mat.onBeforeCompile;
+  mat.defaultAttributeValues={edgeK:[0]};       // only G_BOX carries real edges
+  /* Baked: the mesh is several parts merged into one (see mergeStatic), so a
+     part's own space can no longer be read off modelMatrix — the merge wrote
+     it into per-vertex attributes instead. A define, so the two variants
+     compile as distinct programs. */
+  if(baked)mat.defines={...(mat.defines||{}),SURF_BAKED:''};
+  mat.onBeforeCompile=sh=>{
+    prev(sh);
+    sh.uniforms.uGrime=SURFACE.uGrime;
+    sh.uniforms.uSurf={value:kind};
+    sh.vertexShader=`attribute float edgeK;
+#ifdef SURF_BAKED
+attribute vec3 aSL; attribute vec3 aSS; attribute vec3 aSN;
+#endif
+varying vec3 vSL; varying vec3 vSS; varying vec3 vSN; varying float vEK;
+`+sh.vertexShader.replace('#include <fog_vertex>',`#include <fog_vertex>
+       #ifdef SURF_BAKED
+         vSL = aSL; vSS = aSS; vSN = aSN;
+       #else
+         vSL = transformed;
+         vSS = vec3( length( modelMatrix[0].xyz ), length( modelMatrix[1].xyz ), length( modelMatrix[2].xyz ) );
+         vSN = objectNormal;
+       #endif
+       vEK = edgeK;`);
+    sh.fragmentShader=`uniform sampler2D uGrime; uniform float uSurf;
+varying vec3 vSL; varying vec3 vSS; varying vec3 vSN; varying float vEK;
+float surfSeam( vec2 uv, vec2 cell, float stagger ){
+  vec2 q = uv / cell; q.x += floor( q.y ) * stagger;
+  vec2 dl = ( 0.5 - abs( fract( q ) - 0.5 ) ) * cell;
+  float d = min( dl.x, dl.y ), px = fwidth( d );
+  return ( 1.0 - smoothstep( 0.12, 0.3 + px * 1.5, d ) ) * ( 1.0 - smoothstep( 0.3, 0.9, px ) );
+}
+float surfCell( vec2 uv, vec2 cell, float stagger ){
+  vec2 q = uv / cell; q.x += floor( q.y ) * stagger;
+  return fract( sin( dot( floor( q ), vec2( 12.9898, 78.233 ) ) ) * 43758.5453 );
+}
+`+sh.fragmentShader.replace('#include <map_fragment>',`#include <map_fragment>
+       {
+         vec3 p = vSL * vSS, an = abs( normalize( vSN ) );
+         vec2 fuv = ( an.x > an.y && an.x > an.z ) ? p.zy : ( an.y > an.z ? p.xz : p.xy );
+         bool vertical = an.y < 0.5;
+         float nz = texture2D( uGrime, fuv / 53.0 ).r;
+         float st = texture2D( uGrime, vec2( fuv.x / 13.0, fuv.y / 160.0 ) ).g;
+         float h = clamp( vSL.y + 0.5, 0.0, 1.0 );
+         vec3 c = diffuseColor.rgb;
+         if ( uSurf < 1.5 ) {                 // armour plate: big sheets, fine seams
+           c *= 1.0 - 0.26 * surfSeam( fuv, vec2( 26.0, 15.0 ), 0.0 );
+           c *= 0.95 + 0.08 * surfCell( fuv, vec2( 26.0, 15.0 ), 0.0 );
+         } else if ( uSurf < 2.5 ) {          // poured concrete: big slabs, stained
+           c *= 1.0 - 0.30 * surfSeam( fuv, vec2( 16.0, 16.0 ), 0.0 );
+           c *= 0.90 + 0.16 * surfCell( fuv, vec2( 16.0, 16.0 ), 0.0 );
+         } else if ( uSurf > 4.5 ) {          // roll-up shutter: horizontal slats
+           float sl = fract( fuv.y / 1.6 );
+           c *= 0.72 + 0.28 * smoothstep( 0.0, 0.25, sl ) * ( 1.0 - smoothstep( 0.8, 1.0, sl ) );
+         } else if ( uSurf > 3.5 ) {          // hazard chevrons, painted over the base colour
+           c = mix( vec3( 0.018 ), c, step( 0.5, fract( ( fuv.x + fuv.y ) / 5.0 ) ) );
+         }
+         float grime = ( 1.0 - h ) * ( 1.0 - h ) * 0.30 + ( nz - 0.5 ) * 0.30;
+         if ( vertical ) grime += max( 0.0, st - 0.5 ) * 0.55;
+         c *= clamp( 1.0 - grime, 0.5, 1.2 );
+         if ( !vertical ) c = mix( c, vec3( 0.30, 0.26, 0.19 ), 0.22 * smoothstep( 0.42, 0.62, nz ) );
+         if ( vEK > 0.5 ) {                   // worn edges, boxes only
+           vec3 d = ( 0.5 - abs( vSL ) ) * vSS;
+           float mn = min( d.x, min( d.y, d.z ) ), mx = max( d.x, max( d.y, d.z ) );
+           float mid = d.x + d.y + d.z - mn - mx;
+           float wear = ( 1.0 - smoothstep( 0.12, 0.6, mid ) ) * smoothstep( 0.35, 0.55, nz + 0.12 );
+           c = mix( c, c * 1.55 + 0.015, wear * 0.5 );
+         }
+         diffuseColor.rgb = c;
+       }`);
+  };
+  return mat;
+}
+
 /* flat: faceted, for rock and machined plate. glow: unlit emissive, for lamps,
    ore and holograms — these must not go grey when the sun is low. */
-function M(hex,flat,glow){
-  const k=hex+'|'+(flat?1:0)+'|'+(glow?1:0);
+function M(hex,flat,glow,baked){
+  const k=hex+'|'+(flat?1:0)+'|'+(glow?1:0)+'|'+(baked?1:0);
   let m=MATS.get(k);
   if(!m){
-    m=glow?new THREE.MeshBasicMaterial({color:col(hex)})
-          :new THREE.MeshPhongMaterial({color:col(hex),shininess:8,
-             specular:col('#15181c'),flatShading:!!flat});
-    MATS.set(k,shroudify(m));
+    if(glow) m=shroudify(new THREE.MeshBasicMaterial({color:col(hex)}));
+    else {
+      const kind=SURFACE_KIND[hex]??SURF_PLATE;
+      /* plate takes a faint metallic glint; earth and concrete stay matte */
+      m=new THREE.MeshPhongMaterial({color:col(hex),flatShading:!!flat,
+        shininess:kind===SURF_PLATE?22:6, specular:col(kind===SURF_PLATE?'#262a30':'#101214')});
+      m=surfaceify(shroudify(m),kind,!!baked);
+    }
+    m.userData={hex,flat:!!flat,glow:!!glow,baked:!!baked};
+    MATS.set(k,m);
   }
   return m;
+}
+/* ---- faction liveries ----
+   Models are authored in neutral plate; each side re-skins its prototypes
+   once. The Dominion fields sand-and-khaki armour, the Scourge gunmetal —
+   the two sides must be told apart by the hull, at a glance and at any
+   zoom, not only by a stripe of trim. */
+const FACTION_PLATES=[
+  {'#5b636f':'#7d7560','#434a55':'#5f5949','#727b88':'#958c74'},
+  {'#5b636f':'#4f545b','#434a55':'#393d44','#727b88':'#676c75'},
+];
+/* ---- static merge ----
+   A structure is sixty-odd primitives, and a base of forty structures was a
+   thousand draw calls — the one cost the Iris-class GPUs this has to run on
+   cannot absorb. Everything that never moves independently is merged, per
+   material, into one mesh; anything tagged to move (turret, rotor, dish,
+   bucket wheel, ore load, beacon) stays a live node, and is merged within
+   itself. Each vertex keeps the part-space position, scale and normal the
+   surface shader needs, as attributes. */
+function isAnimated(root){
+  const s=new Set();
+  for(const k of ['tur','rotor','tailrotor','wheel','ore'])if(root.userData[k])s.add(root.userData[k]);
+  for(const e of root.userData.spin||[])s.add(e.o);
+  for(const e of root.userData.blink||[])s.add(e.o);
+  return s;
+}
+function mergeStatic(root,anchors){
+  root.updateMatrixWorld(true);
+  const inv=root.matrixWorld.clone().invert();
+  const buckets=new Map(), victims=[];
+  const pos=new THREE.Vector3(), quat=new THREE.Quaternion(), scl=new THREE.Vector3();
+  const walk=o=>{
+    for(const c of o.children){
+      if(anchors.has(c)){ if(!c.isMesh)mergeStatic(c,anchors); continue; }
+      if(c.isMesh&&c.material.userData.hex){
+        const rel=inv.clone().multiply(c.matrixWorld);
+        rel.decompose(pos,quat,scl);
+        const u=c.material.userData, key=u.hex+'|'+u.flat+'|'+u.glow+'|'+c.castShadow;
+        if(!buckets.has(key))buckets.set(key,{u,cast:c.castShadow,parts:[]});
+        buckets.get(key).parts.push({geo:c.geometry,rel,scale:[Math.abs(scl.x),Math.abs(scl.y),Math.abs(scl.z)]});
+        victims.push(c);
+      }
+      if(c.children.length)walk(c);
+    }
+  };
+  walk(root);
+  for(const v of victims)v.parent.remove(v);
+  for(const {u,cast,parts} of buckets.values()){
+    let n=0;
+    const src=parts.map(p=>{ const g=p.geo.index?p.geo.toNonIndexed():p.geo; n+=g.attributes.position.count; return {...p,g}; });
+    const P=new Float32Array(n*3), N=new Float32Array(n*3), SL=new Float32Array(n*3), SS=new Float32Array(n*3), SN=new Float32Array(n*3), EK=new Float32Array(n);
+    const nm=new THREE.Matrix3(), v=new THREE.Vector3();
+    let o=0;
+    for(const {g,rel,scale} of src){
+      const gp=g.attributes.position, gn=g.attributes.normal, ek=g.attributes.edgeK;
+      nm.getNormalMatrix(rel);
+      for(let i=0;i<gp.count;i++,o++){
+        SL[o*3]=gp.getX(i); SL[o*3+1]=gp.getY(i); SL[o*3+2]=gp.getZ(i);
+        SN[o*3]=gn.getX(i); SN[o*3+1]=gn.getY(i); SN[o*3+2]=gn.getZ(i);
+        SS[o*3]=scale[0]; SS[o*3+1]=scale[1]; SS[o*3+2]=scale[2];
+        EK[o]=ek?ek.getX(i):0;
+        v.fromBufferAttribute(gp,i).applyMatrix4(rel); P[o*3]=v.x; P[o*3+1]=v.y; P[o*3+2]=v.z;
+        v.fromBufferAttribute(gn,i).applyMatrix3(nm).normalize(); N[o*3]=v.x; N[o*3+1]=v.y; N[o*3+2]=v.z;
+      }
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.BufferAttribute(P,3));
+    geo.setAttribute('normal',new THREE.BufferAttribute(N,3));
+    geo.setAttribute('aSL',new THREE.BufferAttribute(SL,3));
+    geo.setAttribute('aSS',new THREE.BufferAttribute(SS,3));
+    geo.setAttribute('aSN',new THREE.BufferAttribute(SN,3));
+    geo.setAttribute('edgeK',new THREE.BufferAttribute(EK,1));
+    geo.computeBoundingSphere();
+    const mesh=new THREE.Mesh(geo,M(u.hex,u.flat,u.glow,true));
+    mesh.castShadow=cast; mesh.receiveShadow=true;
+    root.add(mesh);
+  }
+}
+function applyLivery(g,owner){
+  const swap=FACTION_PLATES[owner];
+  g.traverse(o=>{
+    const u=o.isMesh&&o.material.userData;
+    if(u&&swap[u.hex])o.material=M(swap[u.hex],u.flat,u.glow);
+  });
 }
 /* Place a primitive by its FOOTPRINT: (x,z) is the centre, y is the underside.
    Authoring against the base rather than the centre is what keeps a parts list
@@ -3136,7 +3318,7 @@ function rockGeo(seed){
 }
 /* One faceted crystal: a hexagonal shaft with a pointed cap. */
 function crystalParts(list,x,z,r,h,lean,yaw,hex){
-  const shaft=new THREE.CylinderGeometry(r,r*0.82,h,6,1), cap=new THREE.ConeGeometry(r,r*2.2,6,1);
+  const shaft=new THREE.CylinderGeometry(r,r*0.82,h,6,1,true), cap=new THREE.ConeGeometry(r,r*2.2,6,1,true);
   /* tip away from the cluster's heart: rotate about the horizontal axis
      perpendicular to the direction the crystal stands in */
   const q=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(Math.sin(yaw),0,-Math.cos(yaw)),lean);
@@ -3162,7 +3344,7 @@ const SCATTER_MODELS={
     const greens=['#3d6a2e','#4a7a34','#35602a','#558438'];
     for(let i=0;i<4;i++){
       const a=i/4*6.28+rng(), d=i?0.18:0, s=0.36+rng()*0.14;
-      parts.push({geo:new THREE.IcosahedronGeometry(0.5,1),hex:greens[i],
+      parts.push({geo:new THREE.IcosahedronGeometry(0.5,0),hex:greens[i],
         m:mtx(Math.cos(a)*d,0.62+(i?0:0.12)+rng()*0.06,Math.sin(a)*d,s*1.15,s,s*1.15,rng(),rng(),0)});
     }
     return bake(parts);
@@ -3187,8 +3369,68 @@ const SCATTER_MODELS={
 /* Structure palette. Pitched a couple of stops brighter than the 2D sprite
    sheet used: those colours were painted with their own highlights baked in,
    whereas these are unlit base colours that the sun still has to work on. */
-const PLATE='#5b636f', PLATE_D='#434a55', PLATE_L='#727b88', IRON='#31353d',
-      GLASS='#4fd6b0', RUST='#8a7048', CONC='#6f7069', BLACK='#22252a';
+const PLATE='#5b636f', PLATE_D='#434a55', PLATE_L='#727b88', IRON='#40454e',
+      GLASS='#4fd6b0', RUST='#8a7048', CONC='#6f7069', BLACK='#22252a',
+      SHUTTER='#565d66', HAZARD='#d9a21c', WINDOW='#ffd79a', BEACON='#ff4a3a';
+Object.assign(SURFACE_KIND,{
+  [CONC]:SURF_SLAB, '#31353b':SURF_SLAB,                          // aprons, helipad deck
+  [RUST]:SURF_EARTH, '#7b6a44':SURF_EARTH,                        // sandbags
+  '#2c2a1e':SURF_EARTH, '#4a4230':SURF_EARTH, '#5b4c32':SURF_EARTH, // trench spoil and boards
+  [GLASS]:SURF_NONE, '#1b1f26':SURF_NONE, '#cfd3d8':SURF_NONE,    // glazing, canopy, pad markings
+  [SHUTTER]:SURF_SHUTTER, [HAZARD]:SURF_HAZARD,
+});
+
+/* ---- greeble kit ----
+   The small parts that make a structure read as a working installation from
+   an RTS camera: roof plant, vents, pipe runs, antennas, lit windows, hazard
+   striping. Each returns what it built so a model can tag it for animation
+   (see ANIM below). */
+function acUnit(g,x,y,z,s=1){
+  blk(g,9*s,4.5*s,7*s,PLATE_L,x,y,z,true);
+  cyl(g,2.6*s,0.6,BLACK,x-1.6*s,y+4.5*s,z);                 // fan well
+  blk(g,1.2*s,3*s,6*s,IRON,x+3.2*s,y+4.5*s,z,true);
+}
+function roofVent(g,x,y,z,r=2.2){
+  cyl(g,r,3.4,IRON,x,y,z,true);
+  cyl(g,r*1.35,0.8,PLATE_L,x,y+4.2,z);                      // rain cap
+  cyl(g,0.5,1.6,IRON,x,y+3.2,z);
+}
+/* A straight pipe between two points, with a flange at each end. */
+function pipe(g,a,b,r,hex=IRON){
+  const A=new THREE.Vector3(...a), B=new THREE.Vector3(...b), len=A.distanceTo(B);
+  const m=new THREE.Mesh(G_CYL,M(hex,false));
+  m.scale.set(r*2,len,r*2);
+  m.position.copy(A).add(B).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),B.clone().sub(A).normalize());
+  m.castShadow=true; m.receiveShadow=true; g.add(m);
+  for(const P of [A,B]){ const f=new THREE.Mesh(G_CYL,M(PLATE_L,true));
+    f.scale.set(r*2.8,0.9,r*2.8); f.position.copy(P); f.quaternion.copy(m.quaternion); g.add(f); }
+  return m;
+}
+function antenna(g,x,y,z,h=16){
+  cyl(g,0.45,h,IRON,x,y,z);
+  blk(g,4,0.4,0.4,IRON,x,y+h*0.72,z);
+  return lamp(g,1.1,BEACON,x,y+h+1.1,z);                    // blinks: tag it
+}
+function windows(g,n,x0,x1,y,z,face=1){
+  for(let i=0;i<n;i++){
+    const x=x0+(x1-x0)*(n>1?i/(n-1):0.5);
+    put(g,G_BOX,3.2,2.2,0.6,WINDOW,x,y,z+face*0.2,false,true);
+  }
+}
+/* Upright hazard-striped posts either side of a bay mouth. */
+function bayPosts(g,halfW,h,z,y=0,cx=0){
+  for(const sx of [-1,1]) blk(g,2.4,h,1.4,HAZARD,cx+sx*(halfW+1.2),y,z,true);
+}
+/* ---- building animation tags ----
+   ANIM records, on a prototype, which children spin, which lamps blink and
+   where smoke leaves the structure. instantiate() remaps them onto each
+   clone; the renderer drives them. Nothing here touches the simulation. */
+const ANIM={
+  spin(g,o,rate){ (g.userData.spin??=[]).push({o,rate}); return o; },
+  blink(g,o,phase=0){ (g.userData.blink??=[]).push({o,phase}); return o; },
+  stack(g,x,y,z,kind='smoke'){ (g.userData.stacks??=[]).push({p:new THREE.Vector3(x,y,z),kind}); },
+};
 const BMODELS={
   conyard(g,trim,dark){
     blk(g,92,7,92,CONC,0,0,0);                       // apron slab
@@ -3207,8 +3449,18 @@ const BMODELS={
     lamp(g,2.4,'#ffcf6e',16,55,-26);
     for(const dx of [-22,22]) cyl(g,5,14,IRON,dx,37,30,true);   // vent stacks
     for(const dx of [-22,22]) cyl(g,5.4,3,BLACK,dx,50,30);
-    blk(g,40,10,3,BLACK,0,6,39.5);                   // shuttered bay, south face
-    stripe(g,40,3,trim,0,16.6,39.5);
+    for(const dx of [-22,22]) ANIM.stack(g,dx,53,30);
+    blk(g,40,14,3,SHUTTER,0,6,39.5);                 // shuttered bay, south face
+    stripe(g,40,3,trim,0,20.6,39.5);
+    bayPosts(g,20,14,40,6);
+    windows(g,3,-34,-25,25,39.2); windows(g,3,25,34,25,39.2);
+    /* roof plant on the clerestory */
+    acUnit(g,-18,46,-14); acUnit(g,18,46,-14,0.9);
+    roofVent(g,-20,46,18); roofVent(g,20,46,18);
+    ANIM.blink(g,antenna(g,26,46,-20,18),0);
+    /* service pipework down the east wall */
+    pipe(g,[40.5,10,-20],[40.5,30,-20],1.4); pipe(g,[40.5,30,-20],[40.5,30,22],1.4);
+    pipe(g,[40.5,10,22],[40.5,30,22],1.4);
   },
   power(g,trim,dark){
     blk(g,58,6,58,CONC,0,0,0);
@@ -3225,6 +3477,10 @@ const BMODELS={
     for(let i=0;i<3;i++) cyl(g,8-i*0.6,1.6,GLASS,0,29+i*3.4,10,false);
     lamp(g,3.2,GLASS,0,42,10);
     for(const dx of [-20,20]) blk(g,4,12,4,IRON,dx,25,20,true);
+    for(const dx of [-13,13]) ANIM.stack(g,dx,40,-12,'steam');
+    roofVent(g,-16,29,2); roofVent(g,16,29,2,1.8);
+    windows(g,3,-19,-9,15,25.2); windows(g,3,9,19,15,25.2);
+    blk(g,10,11,2,SHUTTER,0,5,25.6);
   },
   refinery(g,trim,dark){
     blk(g,92,6,60,CONC,0,0,0);
@@ -3237,12 +3493,20 @@ const BMODELS={
     blk(g,26,3,3.4,PLATE_L,0,26,-6);
     /* unloading bay: harvesters nose in here, so it is a real notch in the
        silhouette rather than a painted rectangle */
-    blk(g,30,11,4,BLACK,-22,5,26);
-    stripe(g,30,4,trim,-22,16.6,26);
+    blk(g,30,13,4,SHUTTER,-22,5,26);
+    stripe(g,30,4,trim,-22,18.6,26);
+    bayPosts(g,15,13,26.5,5,-22);
     for(const dx of [-36,-8]) cyl(g,2.2,16,IRON,dx,29,20,true);
     lamp(g,2.2,'#ffcf6e',-36,44,20); lamp(g,2.2,'#ffcf6e',-8,44,20);
+    ANIM.stack(g,-36,47,20); ANIM.stack(g,-8,47,20);
     blk(g,10,7,10,PLATE_D,-22,33,-14,true);
     stripe(g,44,4,trim,-22,33.4,0);
+    acUnit(g,-34,33,-6,0.85); roofVent(g,-10,33,-4);
+    /* silo: a catwalk ring, a ladder and a gantry pipe to the process block */
+    cyl(g,16.4,1.2,IRON,26,24,-6);
+    blk(g,1.6,30,2.6,IRON,26,6,10.2,true);
+    pipe(g,[11,34,-6],[1,30,-6],1.8);
+    windows(g,4,-40,-4,20,25.2);
   },
   barracks(g,trim,dark){
     blk(g,60,5,56,CONC,0,0,0);
@@ -3263,6 +3527,12 @@ const BMODELS={
     cyl(g,1.2,26,IRON,-23,24,-20);                   // flagpole
     blk(g,11,7,0.8,trim,-17.5,42,-20);
     lamp(g,1.8,'#ffcf6e',22,26,22);
+    blk(g,20,12,1,SHUTTER,0,4,23.6);
+    bayPosts(g,10,12,23.4,4);
+    windows(g,4,-22,-13,15,22.2); windows(g,4,13,22,15,22.2);
+    windows(g,5,-20,20,15,-22.2,-1);
+    roofVent(g,-14,31,0,1.8); roofVent(g,14,31,0,1.8);
+    blk(g,6,8,6,PLATE_D,18,24,-12,true); ANIM.stack(g,18,33,-12);   // stove chimney
   },
   factory(g,trim,dark){
     blk(g,92,6,60,CONC,0,0,0);
@@ -3275,11 +3545,16 @@ const BMODELS={
       blk(g,17,7,1.5,GLASS,x,31,-20.5);
     }
     stripe(g,84,4,trim,0,29.4,-2);
-    blk(g,44,14,4,BLACK,0,5,23);                     // vehicle bay
-    stripe(g,44,4,trim,0,19.6,23);
-    for(const dx of [-26,26]) blk(g,5,5,5,IRON,dx,19,23,true);
+    blk(g,44,16,4,SHUTTER,0,5,23);                   // vehicle bay
+    stripe(g,44,4,trim,0,21.6,23);
+    bayPosts(g,22,16,24,5);
+    for(const dx of [-26,26]) blk(g,5,5,5,IRON,dx,21,23,true);
     cyl(g,6,18,IRON,-34,29,10,true); cyl(g,6.6,3,BLACK,-34,47,10);
     cyl(g,4,14,IRON,34,29,10,true);  cyl(g,4.6,3,BLACK,34,47,10);
+    ANIM.stack(g,-34,50,10); ANIM.stack(g,34,46,10);
+    windows(g,3,-40,-28,17,23.2); windows(g,3,28,40,17,23.2);
+    pipe(g,[-42.5,10,-20],[-42.5,26,-20],1.5); pipe(g,[-42.5,26,-20],[-42.5,26,16],1.5);
+    ANIM.blink(g,antenna(g,38,33,-20,14),0.5);
     blk(g,64,3,4,trim,0,44,-2);                      // overhead gantry rail
     for(const dx of [-28,28]) cyl(g,2,15,IRON,dx,29,-2);
   },
@@ -3332,7 +3607,7 @@ const BMODELS={
     stripe(g,34,5,'#cfd3d8',0,5.7,0);                // the H
     stripe(g,5,26,'#cfd3d8',-14.5,5.7,0);
     stripe(g,5,26,'#cfd3d8',14.5,5.7,0);
-    for(const sx of [-1,1])for(const sz of [-1,1]) lamp(g,2,'#ffcf6e',sx*25,7.4,sz*25);
+    for(const sx of [-1,1])for(const sz of [-1,1]) ANIM.blink(g,lamp(g,2,'#ffcf6e',sx*25,7.4,sz*25),(sx+sz+2)*0.25);
     blk(g,18,13,14,PLATE,-20,5.6,-22);               // control hut
     blk(g,18,3,14,PLATE_L,-20,18.6,-22);
     blk(g,15,5,1.2,GLASS,-20,12,-15);
@@ -3349,12 +3624,17 @@ const BMODELS={
     for(let i=0;i<3;i++) cyl(g,15-i*3.4,1.4,GLASS,0,28+i*5,0);
     lamp(g,3.6,GLASS,0,45,0);
     /* dish: the visual promise of the artillery it unlocks */
-    const d=put(g,G_CONE,20,9,20,PLATE_L,20,20,-16,true);
-    d.rotation.set(Math.PI,0,0.7); d.position.set(20,29,-16);
     cyl(g,2,10,IRON,20,20,-16);
+    const dish=new THREE.Group(); dish.position.set(20,29,-16); g.add(dish);
+    const d=put(dish,G_CONE,20,9,20,PLATE_L,0,0,0,true);
+    d.rotation.set(Math.PI,0,0.7); d.position.set(0,0,0);
+    cyl(dish,0.6,8,IRON,3,1,0);                      // feed horn
+    ANIM.spin(g,dish,0.35);
     for(const sx of [-1,1]) blk(g,4,10,4,IRON,sx*21,22,20,true);
     stripe(g,46,4,trim,0,26.4,0);
-    for(const sx of [-1,1]) lamp(g,1.8,trim,sx*21,34,20);
+    for(const sx of [-1,1]) ANIM.blink(g,lamp(g,1.8,trim,sx*21,34,20),sx>0?0.5:0);
+    windows(g,4,-18,18,14,23.2);
+    acUnit(g,-15,26,-15,0.8);
   },
   sandbag(g,trim,dark){
     /* three courses, each bag a squashed hexagonal drum, offset like real
@@ -3625,6 +3905,16 @@ const DETAIL_PAINTERS={
       });
     }
   },
+  /* Grime: soft blotches with no hard marks at all — the dirt, soot and
+     staining on man-made surfaces. G holds a second, independent field so
+     rain streaks do not line up with the blotches. */
+  grime(x,S){
+    const f=tileFbm(4,5,71), g=tileFbm(8,4,79);
+    fillField(x,S,(u,v)=>{
+      const a=Math.max(0,Math.min(255,128+(f(u,v)-0.5)*300)), b=Math.max(0,Math.min(255,128+(g(u,v)-0.5)*300));
+      return [a,b,128];
+    });
+  },
   /* Rock: sampled triplanar, so +v is up on a cliff wall. Bedding bands run
      horizontally and are warped by noise; cracks and ridged noise break them. */
   rock(x,S){
@@ -3772,6 +4062,7 @@ const R3D=(function(){
   }
   const GROUND_TIME={value:0};   // drives the ore shimmer; advanced by render()
   const DET={grass:detailTex('grass'), soil:detailTex('soil'), rock:detailTex('rock')};
+  SURFACE.uGrime.value=detailTex('grime');
   const splatTex=groundTex(splatCan,true);
   /* One texel per tile of ore richness, linearly filtered: a field glows as one
      soft continuous patch and a mined-out tile fades rather than punching a
@@ -3826,7 +4117,7 @@ float groundOre;
          float wRoad = smoothstep( 0.35, 0.65, sp.b + brk * 0.5 );
          float wWood = smoothstep( 0.25, 0.75, sp.a + brk * 0.9 );
          vec3 det = mix( grass, soil, clamp( sp.r + wMud + wRoad, 0.0, 1.0 ) );
-         det = mix( det, rockTri( vGW, n, 1.0 / 120.0 ), rockW );
+         if ( rockW > 0.003 ) det = mix( det, rockTri( vGW, n, 1.0 / 120.0 ), rockW );   // most of the map has none
          diffuseColor.rgb *= det * 2.0;
          diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.42, 0.40, 0.30 ), wWood * 0.75 );
          diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.075, 0.060, 0.035 ) * det * 2.0, wMud * 0.85 );
@@ -3878,9 +4169,19 @@ float groundOre;
     gGeo.setIndex(new THREE.BufferAttribute(idxArr,1));
   }
   const ground=new THREE.Mesh(gGeo,groundMat);
-  ground.receiveShadow=true; ground.castShadow=true;
+  ground.receiveShadow=true; ground.castShadow=false;
   ground.frustumCulled=false;
   scene.add(ground);
+  /* Terrain shadows come from a coarse stand-in: one vertex a tile instead of
+     four, sunk a hair so it cannot shadow the real surface it approximates.
+     It writes neither colour nor depth in the main pass, so it is invisible;
+     only the shadow map sees it. Massifs still throw their shadows across the
+     valleys, for a sixteenth of the triangles. */
+  const SH_SEG=MAPW;
+  const shGeo=new THREE.PlaneGeometry(1,1,SH_SEG,SH_SEG);
+  const shadowProxy=new THREE.Mesh(shGeo,new THREE.MeshBasicMaterial({colorWrite:false,depthWrite:false}));
+  shadowProxy.castShadow=true; shadowProxy.receiveShadow=false; shadowProxy.frustumCulled=false;
+  scene.add(shadowProxy);
   function rebuildTerrain(){
     const p=gGeo.attributes.position.array;
     for(let j=0,k=0;j<=SEG;j++)for(let i=0;i<=SEG;i++,k+=3){
@@ -3890,6 +4191,12 @@ float groundOre;
     gGeo.attributes.position.needsUpdate=true;
     gGeo.computeVertexNormals();
     gGeo.computeBoundingSphere();
+    const sp=shGeo.attributes.position;
+    for(let j=0,k=0;j<=SH_SEG;j++)for(let i=0;i<=SH_SEG;i++,k++){
+      const x=i*WORLD/SH_SEG, z=j*WORLD/SH_SEG;
+      sp.setXYZ(k,x,groundH(x,z)-2,z);
+    }
+    sp.needsUpdate=true; shGeo.computeVertexNormals(); shGeo.computeBoundingSphere();
     terraTex.needsUpdate=true;
   }
 
@@ -3955,17 +4262,26 @@ float groundOre;
     /* Each list is split across a few model variants, and every instance gets
        a small tint so no two trees or boulders are quite the same colour. */
     const tint=new THREE.Color();
-    const spread=(key,list,mat,variants,fn,tintAmt)=>{
-      for(let v=0;v<variants;v++){
-        const mine=list.filter((_,i)=>i%variants===v);
-        if(!mine.length)continue;
-        const mesh=new THREE.InstancedMesh(scatterGeo(key,v),mat,mine.length);
-        mesh.castShadow=true; mesh.receiveShadow=true;
+    /* Instanced per variant *and* per map chunk: a whole-map instanced mesh
+       can never be frustum-culled, so every tree on the map was drawn twice a
+       frame (colour and shadow) whether or not it was on screen. */
+    const CHUNK=12*TILE;
+    const spread=(key,list,mat,variants,fn,tintAmt,castShadow=true)=>{
+      const groups=new Map();
+      list.forEach((d,i)=>{
+        const k=(i%variants)+'|'+Math.floor(d[0]/CHUNK)+'|'+Math.floor(d[2]/CHUNK);
+        if(!groups.has(k))groups.set(k,[]);
+        groups.get(k).push(d);
+      });
+      for(const [k,mine] of groups){
+        const mesh=new THREE.InstancedMesh(scatterGeo(key,+k.split('|')[0]),mat,mine.length);
+        mesh.castShadow=castShadow; mesh.receiveShadow=true;
         scatter.add(mesh);
         place(mesh,mine,fn);
-        mine.forEach((d,i)=>{ const k=1+(d[d.length-1]-0.5)*tintAmt;
-          mesh.setColorAt(i,tint.setRGB(k,k*(1+(d[4]%0.1)-0.05),k)); });
+        mine.forEach((d,i)=>{ const t=1+(d[d.length-1]-0.5)*tintAmt;
+          mesh.setColorAt(i,tint.setRGB(t,t*(1+(d[4]%0.1)-0.05),t)); });
         mesh.instanceColor.needsUpdate=true;
+        mesh.computeBoundingSphere();
       }
     };
     spread('pine',pine,SCATTER_MAT,2,(o,[x,y,z,s,r])=>{
@@ -3979,7 +4295,7 @@ float groundOre;
     },0.28);
     spread('crystals',ore,ORE_MAT,3,(o,[x,y,z,s,r,lean])=>{
       o.position.set(x,y-0.5,z); o.scale.set(s,s*(1+Math.abs(lean)),s); o.rotation.set(0,r,0);
-    },0.2);
+    },0.2,false);   // crystals sit in their own glow; their shadows were never seen
   }
   /* Scatter geometry is built once per variant and kept: every battle reuses it. */
   const scatterGeoCache=new Map();
@@ -4002,6 +4318,8 @@ float groundOre;
     const fn=table[type];
     if(fn)fn(g,FACTION_COLOR[owner],FACTION_DARK[owner]);
     else blk(g,20,16,20,PLATE,0,0,0,true);       // never silently vanish
+    applyLivery(g,owner);
+    mergeStatic(g,isAnimated(g));
     return g;
   }
   function protoFor(kind,type,owner){
@@ -4022,6 +4340,10 @@ float groundOre;
       if(src.userData[key])g.userData[key]=map.get(src.userData[key]);
     if(src.userData.muzzle)g.userData.muzzle=src.userData.muzzle.clone();
     if(src.userData.legs)g.userData.legs=true;
+    if(src.userData.spin)g.userData.spin=src.userData.spin.map(e=>({o:map.get(e.o),rate:e.rate}));
+    if(src.userData.blink)g.userData.blink=src.userData.blink.map(e=>({o:map.get(e.o),phase:e.phase}));
+    if(src.userData.stacks)g.userData.stacks=src.userData.stacks;   // immutable, shared
+    g.userData.phase=Math.random()*6.28;   // so a row of identical plants does not pulse in lockstep
     return g;
   }
   /* Damage reads as a red wash. Cloned meshes share the prototype's materials,
@@ -4039,8 +4361,68 @@ float groundOre;
     s.visible=true; s.material.opacity=Math.min(0.5,amt*3.2);
   }
 
-  function syncBuildings(){
+  /* ---- structure life ----
+     Spinning dishes, blinking beacons, smoke and steam from working stacks,
+     and — the Command & Conquer tell that a building is in trouble — black
+     smoke and then open fire from a structure below half and a quarter
+     health. Unpowered bases fall still: no beacons, no stack output. All of
+     it reads the sim; none of it writes. */
+  const ambient=[];                  // {x,y,z,vx,vy,vz,age,life,size,kind}
+  const AMBIENT_CAP=260;
+  function puff(x,y,z,kind,size){
+    if(ambient.length>=AMBIENT_CAP)return;
+    const hot=kind==='fire';
+    ambient.push({x,y,z,vx:(Math.random()-0.5)*4+4,vy:hot?18:10+Math.random()*6,vz:(Math.random()-0.5)*4-2,
+      age:0,life:hot?0.7+Math.random()*0.4:2.6+Math.random()*1.6,size,kind});
+  }
+  function animateStructure(v,b,dt,powered){
+    const on=b.built>=1&&powered[b.owner], t=GROUND_TIME.value+v.userData.phase;
+    if(v.userData.spin&&on)for(const e of v.userData.spin)e.o.rotation.y+=e.rate*dt;
+    if(v.userData.blink)for(const e of v.userData.blink)e.o.visible=on&&((t*0.9+e.phase)%1)<0.55;
+    if(!(dt>0))return;
+    v.userData.puffT=(v.userData.puffT||0)-dt;
+    if(v.userData.puffT>0)return;
+    v.userData.puffT=0.22+Math.random()*0.12;
+    if(on&&v.userData.stacks)for(const st of v.userData.stacks)
+      if(Math.random()<0.7)puff(v.position.x+st.p.x,v.position.y+st.p.y,v.position.z+st.p.z,st.kind,st.kind==='steam'?7:4.5);
+    const f=b.hp/b.maxhp, r=(v.userData.hitR||30)*0.6;
+    if(f<0.5){
+      const x=v.position.x+(Math.random()-0.5)*r, z=v.position.z+(Math.random()-0.5)*r, y=v.position.y+18+Math.random()*16;
+      puff(x,y,z,'soot',6+(0.5-f)*14);
+      if(f<0.25&&Math.random()<0.8)puff(x,y-6,z,'fire',5+Math.random()*4);
+    }
+  }
+  function updateAmbient(dt){
+    for(let i=ambient.length-1;i>=0;i--){
+      const a=ambient[i]; a.age+=dt;
+      if(a.age>=a.life){ ambient[i]=ambient[ambient.length-1]; ambient.pop(); continue; }
+      a.x+=a.vx*dt; a.y+=a.vy*dt; a.z+=a.vz*dt; a.vy*=1-0.35*dt;
+    }
+  }
+  const AMBIENT_LOOK={
+    smoke:{c:[0.62,0.62,0.60],a:0.45,grow:3.2},
+    steam:{c:[0.95,0.96,0.97],a:0.50,grow:3.6},
+    soot: {c:[0.10,0.10,0.10],a:0.70,grow:3.0},
+  };
+  function drawAmbient(){
+    for(const a of ambient){
+      const f=a.age/a.life;
+      if(a.kind==='fire'){
+        const s=takeSprite(TEX_FIRE,THREE.AdditiveBlending); liveSprites.push(s);
+        s.position.set(a.x,a.y,a.z); const k=a.size*(1.4-f*0.6)*2; s.scale.set(k,k*1.3,1);
+        s.material.opacity=(1-f)*0.9; s.material.color.setRGB(1,0.8,0.55);
+        continue;
+      }
+      const L=AMBIENT_LOOK[a.kind], s=takeSprite(TEX_SOFT,THREE.NormalBlending); liveSprites.push(s);
+      s.position.set(a.x,a.y,a.z);
+      const k=a.size*(1+f*L.grow)*2; s.scale.set(k,k,1);
+      s.material.opacity=L.a*Math.min(1,f*6)*(1-f);
+      s.material.color.setRGB(...L.c);
+    }
+  }
+  function syncBuildings(dt){
     const live=new Set();
+    const powered=[powerOf(PLAYER).ok,powerOf(ENEMY).ok];   // once a frame, not once a building
     for(const b of buildings){
       if(!explored[idx(b.tx,b.ty)])continue;
       live.add(b.id);
@@ -4060,6 +4442,7 @@ float groundOre;
       if(v.userData.tur)v.userData.tur.rotation.y=-(b.turAngle||0);
       setFlash(v,b.flash||0);
       v.visible=true;
+      animateStructure(v,b,dt,powered);
     }
     for(const [id,v] of bView){
       if(live.has(id))continue;
@@ -4141,8 +4524,12 @@ float groundOre;
       s=new THREE.Sprite(new THREE.SpriteMaterial({depthWrite:false,transparent:true}));
       s.frustumCulled=false;
     }
-    s.material.map=tex; s.material.blending=blend;
-    s.material.needsUpdate=true; s.visible=true; fx.add(s); return s;
+    /* A material rebuild is only needed when the program actually changes;
+       flagging it on every take re-validated hundreds of sprites a frame. */
+    if(s.material.map!==tex||s.material.blending!==blend){
+      s.material.map=tex; s.material.blending=blend; s.material.needsUpdate=true;
+    }
+    s.visible=true; fx.add(s); return s;
   }
   function freeSprite(s){ fx.remove(s); spritePool.push(s); }
   function takeLine(){
@@ -4381,6 +4768,8 @@ float groundOre;
       sunDir.set(t.sunDir[0],t.sunDir[1],t.sunDir[2]).normalize();
       return t.name;
     },
+    /* draw calls and triangles of the last frame, for scripts/look.mjs --perf */
+    stats(){ const r=renderer.info.render; return {calls:r.calls,tris:r.triangles}; },
     zoomBy(f){ dist=Math.max(DIST_MIN,Math.min(DIST_MAX,dist*f)); },
     setDist(d){ dist=Math.max(DIST_MIN,Math.min(DIST_MAX,d)); },
     get dist(){ return dist; },
@@ -4409,7 +4798,8 @@ float groundOre;
     render(dt){
       GROUND_TIME.value+=dt||0;
       placeCamera();
-      syncBuildings(); syncUnits(dt); drawEffects();
+      updateAmbient(dt||0);
+      syncBuildings(dt||0); syncUnits(dt); drawEffects(); drawAmbient();
       if(decalDirtyAt&&performance.now()-decalDirtyAt>200){
         decalTex.needsUpdate=true; decalDirtyAt=0;
       }
